@@ -79,7 +79,8 @@ _Static_assert(sizeof(MTFolderIconSnapshotObservation) == 64,
 - (nullable UIView *)resolveNativeBackgroundForFolderView:(UIView *)folderView
                                          nativeBackground:(UIView *)nativeBackground;
 - (BOOL)synchronizeOverlayForFolderView:(UIView *)folderView
-                     installedBackground:(nullable UIView *)installedBackground;
+                     installedBackground:(nullable UIView *)installedBackground
+                        foregroundAnchor:(nullable UIView *)foregroundAnchor;
 @end
 
 static char MTFolderOverlayStateAssociationKey;
@@ -439,7 +440,8 @@ static UIImage *MTFolderResolveOverlayArtwork(
 }
 
 - (BOOL)synchronizeOverlayForFolderView:(UIView *)folderView
-                     installedBackground:(nullable UIView *)installedBackground {
+                     installedBackground:(nullable UIView *)installedBackground
+                        foregroundAnchor:(nullable UIView *)foregroundAnchor {
     if (![NSThread isMainThread]) return NO;
     if (!MTIconOverlaySnapshotIsEnabled()) {
         (void)MTFolderRemoveAssociatedOverlay(folderView);
@@ -484,18 +486,32 @@ static UIImage *MTFolderResolveOverlayArtwork(
     overlayView.center = geometry.center;
     overlayView.transform = geometry.transform;
     overlayView.hidden = NO;
-    overlayView.layer.zPosition = 1000.0;
+    // The native badge can be a sibling inside this compact canvas. Keep the
+    // same depth and explicitly order artwork below that foreground anchor.
+    overlayView.layer.zPosition = 0.0;
     UIImage *current = overlayView.image;
     BOOL sameRaster = current != nil &&
         current.CGImage == overlayImage.CGImage &&
         current.scale == overlayImage.scale &&
         current.imageOrientation == overlayImage.imageOrientation;
     if (!sameRaster) overlayView.image = overlayImage;
-    if (overlayView.superview != overlayContainer) {
-        [overlayContainer addSubview:overlayView];
-    }
-    if (overlayContainer.subviews.lastObject != overlayView) {
-        [overlayContainer bringSubviewToFront:overlayView];
+    if (foregroundAnchor != overlayView &&
+        foregroundAnchor.superview == overlayContainer) {
+        NSArray<UIView *> *subviews = overlayContainer.subviews;
+        NSUInteger anchorIndex = [subviews
+            indexOfObjectIdenticalTo:foregroundAnchor];
+        if (anchorIndex == 0 || anchorIndex == NSNotFound ||
+            subviews[anchorIndex - 1] != overlayView) {
+            [overlayContainer insertSubview:overlayView
+                               belowSubview:foregroundAnchor];
+        }
+    } else {
+        if (overlayView.superview != overlayContainer) {
+            [overlayContainer addSubview:overlayView];
+        }
+        if (overlayContainer.subviews.lastObject != overlayView) {
+            [overlayContainer bringSubviewToFront:overlayView];
+        }
     }
     (void)MTFolderApplyEffectiveOverlayAlpha(state);
     atomic_fetch_add_explicit(
@@ -562,15 +578,19 @@ id MTFolderIconSnapshotResolveNativeBackground(
 
 BOOL MTFolderIconSnapshotSynchronizeOverlay(
     id folderImageView,
-    id installedBackgroundView) {
+    id installedBackgroundView,
+    id foregroundAnchor) {
     if (![folderImageView isKindOfClass:UIView.class] ||
         (installedBackgroundView != nil &&
-         ![installedBackgroundView isKindOfClass:UIView.class])) {
+         ![installedBackgroundView isKindOfClass:UIView.class]) ||
+        (foregroundAnchor != nil &&
+         ![foregroundAnchor isKindOfClass:UIView.class])) {
         return NO;
     }
     return [MTFolderIconSnapshotInstance
         synchronizeOverlayForFolderView:folderImageView
-        installedBackground:installedBackgroundView];
+        installedBackground:installedBackgroundView
+        foregroundAnchor:foregroundAnchor];
 }
 
 BOOL MTFolderIconSnapshotSetOverlayAlpha(id folderImageView,

@@ -48,10 +48,12 @@ FOUNDATION_EXPORT id _Nullable MTFolderIconSnapshotResolveNativeBackground(
 // Synchronizes the separately authored global overlay after Apple's setter.
 // It never creates a background for native folder categories that omit one.
 // The same retained view always stays attached to the compact Home Screen
-// folder image and follows Apple's native zoom carrier.
+// folder image and follows Apple's native zoom carrier, below any foreground
+// anchor supplied by the adapter (the native folder badge).
 FOUNDATION_EXPORT BOOL MTFolderIconSnapshotSynchronizeOverlay(
     id folderImageView,
-    id _Nullable installedBackgroundView);
+    id _Nullable installedBackgroundView,
+    id _Nullable foregroundAnchor);
 FOUNDATION_EXPORT BOOL MTFolderIconSnapshotSetOverlayAlpha(
     id folderImageView,
     CGFloat alpha);

@@ -17,6 +17,7 @@ static const char *const MTIconViewClassName = "SBIconView";
 static const char *const MTIconImageViewClassName = "SBIconImageView";
 static const char *const MTFolderImageViewClassName =
     "SBFolderIconImageView";
+static const char *const MTBadgeViewClassName = "SBIconBadgeView";
 static const char *const MTIconViewConfigureSelectorName =
     "_configureIconImageView:";
 static const char *const MTIconViewConfigureTypeEncoding = "v24@0:8@16";
@@ -57,6 +58,11 @@ typedef void (*MTFolderFloatyCrossfadeFractionSetterFunction)(
     id, SEL, CGFloat);
 typedef void (*MTIconViewConfigureFunction)(id, SEL, id);
 
+// Public UIView traversal stays behind the adapter's validated class gate.
+@protocol MTFolderViewHierarchy <NSObject>
+- (NSArray *)subviews;
+@end
+
 MTFolderNativeSourceAdapterObservation
     MTRuntimeFolderNativeSourceAdapterObservation = {
         .schemaVersion = 1,
@@ -92,6 +98,7 @@ static MTFolderNativeTransitionCallback MTFolderTransitionDidEnd;
 static BOOL (*MTFolderSourcePreparation)(void);
 static Class MTUIViewClass = Nil;
 static Class MTFolderImageViewClass = Nil;
+static Class MTBadgeViewClass = Nil;
 static SEL MTFolderBackgroundGetterSelector;
 static SEL MTFolderIconGridAlphaGetterSelector;
 static _Atomic(bool) MTFolderInstallPassScheduled = false;
@@ -132,8 +139,16 @@ static BOOL MTSynchronizeConfiguredFolderImageView(id folderImageView) {
     (void)MTFolderOverlayAlphaSetter(folderImageView, nativeGridAlpha);
     id installedBackground = MTOriginalFolderBackgroundGetter(
         folderImageView, MTFolderBackgroundGetterSelector);
+    id foregroundAnchor = nil;
+    for (id subview in [(id<MTFolderViewHierarchy>)folderImageView subviews]) {
+        if (MTRuntimeClassIsSubclassOfClass(
+                object_getClass(subview), MTBadgeViewClass)) {
+            foregroundAnchor = subview;
+            break;
+        }
+    }
     BOOL synchronized = MTFolderOverlayResolver(
-        folderImageView, installedBackground);
+        folderImageView, installedBackground, foregroundAnchor);
     if (synchronized) {
         atomic_fetch_add_explicit(
             &MTRuntimeFolderNativeSourceAdapterObservation
@@ -365,9 +380,11 @@ static void MTAttemptFolderSourceInstallation(void) {
     Class iconViewClass = objc_getClass(MTIconViewClassName);
     Class iconImageViewClass = objc_getClass(MTIconImageViewClassName);
     Class folderImageViewClass = objc_getClass(MTFolderImageViewClassName);
+    Class badgeViewClass = objc_getClass(MTBadgeViewClassName);
     Class uiViewClass = objc_getClass("UIView");
     if (iconViewClass == Nil || iconImageViewClass == Nil ||
-        folderImageViewClass == Nil || uiViewClass == Nil) {
+        folderImageViewClass == Nil || badgeViewClass == Nil ||
+        uiViewClass == Nil) {
         return;
     }
 
@@ -425,6 +442,14 @@ static void MTAttemptFolderSourceInstallation(void) {
         @"SpringBoardHome",
         class_getImageName(folderImageViewClass) == NULL
             ? nil : @(class_getImageName(folderImageViewClass)));
+    BOOL validBadgeClass =
+        MTSpringBoardHomeClassMatchesExpectedImage(badgeViewClass) &&
+        MTRuntimeClassIsSubclassOfClass(badgeViewClass, uiViewClass);
+    MTRuntimeABIReportRecordContract(
+        MTFolderNativeSourceAdapterID, @"class:SBIconBadgeView",
+        validBadgeClass, @"SpringBoardHome UIView subclass",
+        class_getImageName(badgeViewClass) == NULL
+            ? nil : @(class_getImageName(badgeViewClass)));
     BOOL expectedSuperclass = MTRuntimeClassIsSubclassOfClass(
         folderImageViewClass, iconImageViewClass);
     MTRuntimeABIReportRecordContract(
@@ -470,6 +495,7 @@ static void MTAttemptFolderSourceInstallation(void) {
         MTSpringBoardHomeClassMatchesExpectedImage(iconViewClass) &&
         MTSpringBoardHomeClassMatchesExpectedImage(iconImageViewClass) &&
         MTSpringBoardHomeClassMatchesExpectedImage(folderImageViewClass) &&
+        validBadgeClass &&
         expectedSuperclass &&
         MTFolderMethodMatches(
             configureMethod, MTIconViewConfigureTypeEncoding) &&
@@ -501,6 +527,7 @@ static void MTAttemptFolderSourceInstallation(void) {
 
     MTUIViewClass = uiViewClass;
     MTFolderImageViewClass = folderImageViewClass;
+    MTBadgeViewClass = badgeViewClass;
     MTFolderBackgroundGetterSelector = getterSelector;
     MTFolderIconGridAlphaGetterSelector = iconGridAlphaGetterSelector;
     MTOriginalIconViewConfigure = (MTIconViewConfigureFunction)

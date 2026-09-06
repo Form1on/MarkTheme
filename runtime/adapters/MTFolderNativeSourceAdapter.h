@@ -14,10 +14,12 @@ typedef id _Nullable (*MTFolderNativeBackgroundResolver)(
 
 // Runs after Apple's setter and receives the background Apple retained. The
 // overlay remains a child of the compact SBFolderIconImageView for its entire
-// lifetime and therefore participates in the same native zoom carrier.
+// lifetime and therefore participates in the same native zoom carrier. The
+// optional foreground anchor is the first native badge in that same container.
 typedef BOOL (*MTFolderNativeOverlayResolver)(
     id folderImageView,
-    id _Nullable installedBackgroundView);
+    id _Nullable installedBackgroundView,
+    id _Nullable foregroundAnchor);
 // Mirrors SpringBoard's authoritative compact folder-grid opacity onto the
 // separately authored compact overlay.
 typedef BOOL (*MTFolderNativeOverlayAlphaSetter)(
