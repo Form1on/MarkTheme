@@ -7,7 +7,7 @@ RootHide。它在兼容主流主题资产（SnowBoard / IconBundles 风格的 `.
 主题的解析与编译全部放在无注入的管理器 App 内完成，注入进程中只运行一个尽可能小的 Runtime，
 并始终以「回到系统原生外观」作为失败时的正确结果。
 
-当前版本为 `v0.3.0`。两种越狱环境使用不同软件包，请勿混装。
+当前版本为 `v0.3.1`。两种越狱环境使用不同软件包，请勿混装。
 
 ## 截图
 
@@ -89,7 +89,7 @@ Library 数据。
 - 产品包只含管理器 App、一个短生命周期的 root Helper 和一个 Runtime，无 daemon、无 IPC
   热路径、无轮询。
 - 除返回桌面动画和文件夹 overlay 外，适配器只替换图像内容；文件夹 overlay 使用一个透明、
-  不响应交互的图像 view，固定置于文件夹背景和原生小图标之上。
+  不响应交互的图像 view，固定置于文件夹背景和原生小图标之上，原生文件夹角标保持在 overlay 之上。
 - 返回桌面动画使用一个 transition-scoped 方形代理 layer 隔离会被非等比 morph 拉伸的主题源图；
   它只在当前图标确实包含 MarkTheme 像素且 crossfade ABI 全部通过时启用，跟随原生 source
   fade，并在系统 `cleanup` 前恢复源 layer、移除代理。该适配不 Hook morph fraction，也不增加

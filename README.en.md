@@ -9,7 +9,7 @@ entirely inside the non-injected Manager app, while injected processes run only 
 Runtime. When anything fails validation, returning to the native system appearance is always the correct
 outcome.
 
-The current version is `v0.3.0`. The two jailbreak environments use different packages and the packages
+The current version is `v0.3.1`. The two jailbreak environments use different packages and the packages
 must not be mixed.
 
 ## Screenshots
@@ -106,7 +106,8 @@ manually modify MarkTheme's Runtime Store or Library data.
 - The package contains the Manager app, one short-lived root Helper, and one Runtime. It has no daemon,
   IPC hot path, or polling loop.
 - Outside the return-to-Home animation and folder overlays, adapters replace image content. A folder
-  overlay uses one transparent, non-interactive image view above the folder background and native miniatures.
+  overlay uses one transparent, non-interactive image view above the folder background and native miniatures,
+  while the native folder badge remains above the overlay.
 - The return-to-Home animation uses one transition-scoped square proxy layer to isolate themed source pixels
   from the non-uniform morph. It activates only when the icon actually contains current MarkTheme pixels and
   the complete crossfade ABI has passed validation. It follows the native source fade, restores the source
