@@ -205,11 +205,26 @@ if find "$data_root" -type f \( -name '*.x' -o -name '*.xm' \) \
     -print | rg -q .; then
   fail 'Runtime source escaped into the product package'
 fi
-cmp -s "$runtime_filter" "$project_root/runtime/MarkThemeRuntime.plist" || \
+python3 - "$runtime_filter" "$project_root/runtime/MarkThemeRuntime.plist" <<'PYPLIST' || \
   fail 'packaged Runtime filter differs from the generated profile source'
-cmp -s "$icon_service_filter" \
-  "$project_root/iconservice/MarkThemeIconServiceRuntime.plist" || \
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as packaged, open(sys.argv[2], "rb") as source:
+    if plistlib.load(packaged) != plistlib.load(source):
+        raise SystemExit(1)
+PYPLIST
+
+python3 - "$icon_service_filter" \
+  "$project_root/iconservice/MarkThemeIconServiceRuntime.plist" <<'PYPLIST' || \
   fail 'packaged IconServices filter differs from its exact source'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as packaged, open(sys.argv[2], "rb") as source:
+    if plistlib.load(packaged) != plistlib.load(source):
+        raise SystemExit(1)
+PYPLIST
 [[ $(plutil -extract Filter.Bundles json -o - "$runtime_filter") == \
       '["com.apple.Preferences","com.apple.SharingUIService","com.apple.Spotlight","com.apple.mobilephone","com.apple.mobileslideshow","com.apple.sharingd","com.apple.springboard"]' ]] || \
   fail 'Runtime filter is not the exact generated seven-host allowlist'
