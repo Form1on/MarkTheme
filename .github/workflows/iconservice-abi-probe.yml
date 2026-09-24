@@ -34,7 +34,7 @@ jobs:
         run: |
           make -C tools/iconservice-abi-probe clean
           make -C tools/iconservice-abi-probe package THEOS_PACKAGE_SCHEME=rootless
-          xcrun lipo -verify_arch arm64 arm64e tools/iconservice-abi-probe/.theos/obj/MarkThemeABIProbe.dylib
+          xcrun lipo tools/iconservice-abi-probe/.theos/obj/MarkThemeABIProbe.dylib -verify_arch arm64 arm64e
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: MarkTheme-ABI-probe-rootless
