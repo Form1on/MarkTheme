@@ -22,6 +22,11 @@ jobs:
           brew install ldid xz
           git clone https://github.com/theos/theos.git "$THEOS"
           git -C "$THEOS" checkout dd5c14bb9d91311e221d51b5bfb8c9e5948156db
+          sed -i '' 's/-multiply_defined suppress//g' "$THEOS/makefiles/targets/_common/darwin_tail.mk"
+          if grep -q -- '-multiply_defined suppress' "$THEOS/makefiles/targets/_common/darwin_tail.mk"; then
+            echo "Failed to remove obsolete Theos linker flag" >&2
+            exit 1
+          fi
           git -C "$THEOS" submodule update --init --recursive
           xcrun clang --version
           xcrun --sdk iphoneos --show-sdk-path
