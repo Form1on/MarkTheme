@@ -26,6 +26,10 @@ typedef struct MTIconServiceImageGeometry {
 
 @end
 
+// Shared process boundary only. Store control validates its own methods and
+// must not depend on the generation adapter's image serialization ABI.
+FOUNDATION_EXPORT BOOL MTIconServiceABIValidateProcess(NSError **error);
+
 FOUNDATION_EXPORT BOOL MTIconServiceABIValidateRuntime(
     Method _Nullable *_Nullable generationMethodOut,
     NSError **error);

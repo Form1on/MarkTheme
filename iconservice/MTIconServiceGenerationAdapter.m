@@ -5,6 +5,7 @@
 #include <stdatomic.h>
 
 #import "MTIconServiceABI.h"
+#import "MTIconServiceABIDiagnostics.h"
 #import "MTIconServiceImageResolver.h"
 
 NSString *const MTIconServiceGenerationAdapterErrorDomain =
@@ -151,6 +152,15 @@ BOOL MTIconServiceGenerationAdapterInstall(
     NSError *ABIError = nil;
     if (!MTIconServiceABIValidateRuntime(&method, &ABIError) ||
         method == NULL) {
+        // Store-control Hooks may already be installed. Their live IMPs are
+        // not evidence of a cache-control validation failure at this stage.
+        NSMutableDictionary *diagnostic =
+            [MTIconServiceImageConstructionDiagnosticReport() mutableCopy];
+        if (ABIError != nil) diagnostic[@"failure"] = @{
+            @"domain" : ABIError.domain, @"code" : @(ABIError.code),
+            @"description" : ABIError.localizedDescription,
+        };
+        MTIconServiceLogABIDiagnosticReport(diagnostic);
         atomic_store_explicit(
             &MTIconServiceGenerationAdapterObservation.installed,
             0, memory_order_release);

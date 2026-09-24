@@ -242,16 +242,8 @@ static BOOL MTIconServiceBoolGetter(id object,
 
 @end
 
-BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
-                                     NSError **error) {
+BOOL MTIconServiceABIValidateProcess(NSError **error) {
     if (error != NULL) *error = nil;
-    if (generationMethodOut != NULL) *generationMethodOut = NULL;
-    MTValidatedBundleIconClass = Nil;
-    MTValidatedDescriptorClass = Nil;
-    MTValidatedCacheImageClass = Nil;
-    MTValidatedCacheImageInitializer = NULL;
-    MTValidatedImageClass = Nil;
-    MTValidatedImageDataInitializer = NULL;
     const char *serviceName = getenv("XPC_SERVICE_NAME");
     BOOL identityMatches =
         [NSProcessInfo.processInfo.processName
@@ -266,6 +258,20 @@ BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
             @"Icon service process identity is unsupported.");
         return NO;
     }
+    return YES;
+}
+
+BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
+                                     NSError **error) {
+    if (error != NULL) *error = nil;
+    if (generationMethodOut != NULL) *generationMethodOut = NULL;
+    MTValidatedBundleIconClass = Nil;
+    MTValidatedDescriptorClass = Nil;
+    MTValidatedCacheImageClass = Nil;
+    MTValidatedCacheImageInitializer = NULL;
+    MTValidatedImageClass = Nil;
+    MTValidatedImageDataInitializer = NULL;
+    if (!MTIconServiceABIValidateProcess(error)) return NO;
     Class generationClass = objc_getClass(MTGenerationClassName);
     Method generationMethod = generationClass == Nil ? NULL :
         class_getInstanceMethod(
@@ -283,15 +289,24 @@ BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
     if (bundleIconClass == Nil || descriptorClass == Nil ||
         !MTIconServiceMethodMatches(
             generationMethod, MTGenerationTypeEncoding,
-            MTIconServiceExpectedIconServicesPath) ||
-        !MTIconServiceMethodMatches(
+            MTIconServiceExpectedIconServicesPath)) {
+        MTIconServiceABISetError(error, 3,
+            @"ISGenerationRequest method or request class ABI changed.");
+        return NO;
+    }
+    if (!MTIconServiceMethodMatches(
             cacheInitializer, MTCacheImageInitializerTypeEncoding,
-            MTIconServiceExpectedIconFoundationPath) ||
-        !MTIconServiceMethodMatches(
+            MTIconServiceExpectedIconFoundationPath)) {
+        MTIconServiceABISetError(error, 3,
+            @"IFCacheImage initWithCGImage:scale:minimumSize:placeholder:iconSize: "
+             "serializer ABI is unavailable; IFImage data initialization alone is insufficient.");
+        return NO;
+    }
+    if (!MTIconServiceMethodMatches(
             dataInitializer, MTImageDataInitializerTypeEncoding,
             MTIconServiceExpectedIconFoundationPath)) {
         MTIconServiceABISetError(error, 3,
-            @"Icon service generation or IFImage construction ABI changed.");
+            @"IFImage initWithData:uuid:validationToken: rehydration ABI changed.");
         return NO;
     }
     MTValidatedBundleIconClass = bundleIconClass;

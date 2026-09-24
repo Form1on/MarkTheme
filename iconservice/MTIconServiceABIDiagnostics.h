@@ -10,6 +10,10 @@ FOUNDATION_EXPORT NSDictionary<NSString *, id> *MTIconServiceMethodDiagnostic(
     const char *expectedEncoding, NSString *expectedImage);
 FOUNDATION_EXPORT NSDictionary<NSString *, id> *MTIconServiceABIDiagnosticReport(
     NSError *_Nullable failure);
+// Focused follow-up for the missing bitmap serializer. Lists only IFCacheImage
+// and IFImage (including inherited declarations), without invoking candidates.
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *
+    MTIconServiceImageConstructionDiagnosticReport(void);
 FOUNDATION_EXPORT void MTIconServiceLogABIDiagnosticReport(
     NSDictionary<NSString *, id> *report);
 

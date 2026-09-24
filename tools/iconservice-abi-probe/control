@@ -1,8 +1,8 @@
 Package: com.hmmzzz.marktheme.abiprobe
 Name: MarkTheme IconServices ABI Probe
-Version: 0.1.0
+Version: 0.2.0
 Architecture: iphoneos-arm64
-Description: Temporary read-only IconServices runtime metadata probe.
+Description: Read-only IFCacheImage and IFImage constructor hierarchy probe.
 Maintainer: MarkTheme diagnostic build
 Author: MarkTheme diagnostic build
 Section: Development

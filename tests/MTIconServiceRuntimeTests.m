@@ -348,6 +348,11 @@ static void MTIconServiceRunABIDiagnosticTests(void) {
     class_addMethod(fixture, sel_registerName("cache"), stub, "@16@0:8");
     class_addMethod(fixture, sel_registerName("incompatibleRun:"), stub, "v24@0:8@16");
     class_addMethod(object_getClass(fixture), sel_registerName("classOnlyRun"), stub, "v16@0:8");
+    class_addMethod(fixture,
+        sel_registerName("initWithCGImage:scale:minimumSize:placeholder:iconSize:"),
+        stub, "@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52");
+    class_addMethod(fixture, sel_registerName("initWithData:uuid:validationToken:"),
+        stub, "@40@0:8@16@24@32");
     objc_registerClassPair(fixture);
     Dl_info info = {0};
     MTIconServiceAssert(dladdr((const void *)stub, &info) != 0 && info.dli_fname != NULL,
@@ -378,6 +383,27 @@ static void MTIconServiceRunABIDiagnosticTests(void) {
     NSDictionary *missing = MTIconServiceMethodDiagnostic(Nil, @"run", NO, "v16@0:8", image);
     MTIconServiceAssert([missing[@"failures"] containsObject:@"class-missing"],
         @"Missing classes must produce explicit diagnostic evidence");
+    NSDictionary *legacy = MTIconServiceMethodDiagnostic(fixture,
+        @"initWithCGImage:scale:minimumSize:placeholder:iconSize:", NO,
+        "@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52", image);
+    NSDictionary *rehydrator = MTIconServiceMethodDiagnostic(fixture,
+        @"initWithData:uuid:validationToken:", NO, "@40@0:8@16@24@32", image);
+    MTIconServiceAssert([legacy[@"matchesExistingValidation"] boolValue] &&
+        [rehydrator[@"matchesExistingValidation"] boolValue],
+        @"Both legacy construction stages retain their exact ABI");
+    NSDictionary *focused = MTIconServiceImageConstructionDiagnosticReport();
+    NSDictionary *classes = focused[@"classes"];
+    MTIconServiceAssert(classes.count == 2 && classes[@"IFCacheImage"] != nil &&
+        classes[@"IFImage"] != nil && [focused[@"checks"] count] == 2 &&
+        [NSJSONSerialization isValidJSONObject:focused],
+        @"Follow-up capture must be restricted to the two image hierarchies");
+    NSDictionary *capability = focused[@"imageConstruction"];
+    BOOL bothConstructors =
+        [capability[@"cacheImageInitializerAvailable"] boolValue] &&
+        [capability[@"imageDataInitializerAvailable"] boolValue];
+    MTIconServiceAssert([capability[@"selectedPath"] isEqual:
+        bothConstructors ? @"legacy-cache-image-bitmap-data" : @"unavailable"],
+        @"A data rehydrator alone must not advertise a bitmap serializer");
     for (NSString *domain in @[@"com.hmmzzz.marktheme.icon-service-abi",
                                @"com.hmmzzz.marktheme.icon-service-store-invalidator"]) {
         NSError *failure = [NSError errorWithDomain:domain code:3 userInfo:nil];

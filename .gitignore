@@ -2,6 +2,7 @@
 
 # Theos build and package output
 .theos/
+.ci-theos/
 packages/
 *.deb
 *.dSYM/

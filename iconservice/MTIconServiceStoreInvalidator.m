@@ -202,7 +202,7 @@ static void MTIconServiceHookedClearOperationRun(id self, SEL selector) {
         return NO;
     }
     NSError *ABIError = nil;
-    if (!MTIconServiceABIValidateRuntime(NULL, &ABIError)) {
+    if (!MTIconServiceABIValidateProcess(&ABIError)) {
         MTIconServiceLogABIDiagnosticReport(MTIconServiceABIDiagnosticReport(ABIError));
         if (error != NULL) *error = ABIError;
         return NO;

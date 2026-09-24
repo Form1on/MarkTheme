@@ -1,231 +1,274 @@
-# MarkTheme IconServices ABI diagnostic patch
+# iOS 18.1.1 image-construction follow-up (build 206)
 
-Base commit: `53bc9b36e773b42bc61b61ccebfe04c129ff58b6` (v0.3.1, Runtime 204).
-This is the requested diagnostic-first fallback. No iOS 18.1.1 compatibility
-claim or new accepted ABI is included; those require the real device report.
+This is a **partial validation fix, not a completed iOS 18.1.1 compatibility
+release**. No supported replacement serializer has yet been observed. Apply
+must still fail on the reported device. The full package workflow is prepared,
+but has not been run here and no .deb is supplied.
 
-## What detail 3 means
+## Exact finding
 
-The status protocol publishes only `NSError.code`, not its domain. The
-`installWithError:` path can return either of these errors:
+Both captures in the supplied report agree: the nine existing method checks
+pass except the missing instance initializer
+`IFCacheImage -initWithCGImage:scale:minimumSize:placeholder:iconSize:`.
+ClearCacheOperation's run/operation/cache encodings and implementation images
+pass. The error reaching store-control is code 3 from
+`com.hmmzzz.marktheme.icon-service-abi`, not proof of code 3 from the
+store-invalidator domain.
 
-| NSError domain | Meaning of code 3 |
-| --- | --- |
-| `com.hmmzzz.marktheme.icon-service-abi` | Earlier generation/image constructor validation failed: required class, encoding, or implementation image. |
-| `com.hmmzzz.marktheme.icon-service-store-invalidator` | At least one ClearCacheOperation instance method failed exact encoding/IMP image validation. |
+The call graph is:
 
-The second error requires these methods:
+1. Bootstrap installs store control, previously calling the global generation
+   validator before checking IconCacheService/ClearCacheOperation.
+2. Bootstrap installs the generation adapter, which hooks
+   `ISGenerationRequest -generateImageReturningRecordIdentifiers:`.
+3. The adapter calls the original method, reads its IFImage geometry, and asks
+   MTIconServiceImageResolver to compose a replacement **CGImage**.
+4. MTIconServiceABICreateReplacementImage constructs IFCacheImage with that
+   CGImage and the original scale/minimumSize/placeholder/iconSize.
+5. It obtains `bitmapData` from that temporary IFCacheImage, then calls the
+   validated IFImage data initializer with those bytes, the original UUID and
+   original 40-byte validation token. It restores the largest flag.
 
-| Instance method | Expected encoding |
-| --- | --- |
-| `run` | `v16@0:8` |
-| `operation` | `Q16@0:8` |
-| `cache` | `@16@0:8` |
+IFCacheImage and IFImage are consecutive stages, not alternative image paths.
+There is no existing IFImage fallback. The proven data initializer does not
+prove that it accepts PNG, arbitrary raw pixels, or a CGImage object. Its
+Objective-C encoding only says that its three explicit arguments are objects.
 
-Each IMP must resolve through `dladdr()` to
-`/System/Library/CoreServices/iconservicesagent`. A missing method, changed
-encoding, moved/inherited implementation, or an existing replacement Hook can
-all fail. The supplied status cannot identify which condition failed.
+**Missing runtime fact:** the supported iOS 18.1.1 constructor/serialization
+path that produces IFImage-compatible bitmapData from a replacement CGImage
+while preserving the required geometry; alternatively, evidence of a direct
+image constructor with equivalent semantics. Neither the source nor the
+supplied report establishes that path. This is the explicit stop condition
+allowed in the task. No speculative selector, data format, or OR gate is added.
 
-The source contains no captured iOS 18.1.1 ABI establishing a compatibility
-adapter. A different selector cannot safely be substituted based only on its
-name and type encoding; its native transaction semantics also need evidence.
+## Changes and exact behavior
 
-## Exact behavior change
+- Extract the unchanged process name/executable/XPC-service identity checks
+  into MTIconServiceABIValidateProcess.
+- Store control calls that process validator and keeps all its existing exact
+  method/encoding/IMP-image checks. It no longer depends on image construction.
+- Generation validation still requires both construction stages. Each failed
+  stage now names its own requirement, retaining error code 3.
+- Generation installation emits focused image diagnostics. It does not report
+  already-hooked ClearCacheOperation IMPs as the cause of a generation failure.
+- Diagnostics report `imageConstruction.selectedPath` as
+  `legacy-cache-image-bitmap-data` only when both constructor checks pass;
+  otherwise `unavailable`. This describes constructor metadata, not verified
+  execution, runtime readiness, or an acknowledgement.
+- Build number is 206. Legacy construction and its exact acceptance predicates
+  remain intact. Unknown construction ABIs still fail.
+- The probe is version 0.2.0 and captures only IFCacheImage/IFImage hierarchies,
+  with declared instance/class methods, exact encodings, IMP addresses/images,
+  class images, OS version, PID and compiled build. Candidates are never called.
+  Ancestor declarations are included, stopping before NSObject.
 
-- Previously, startup logged error domain/code and published a numeric detail.
-- The integrated patch preserves the rejection and adds per-method diagnostics:
-  expected/actual type encodings, instance/class distinction, missing classes
-  and selectors, IMP addresses/images, OS version, PID and Runtime build.
-  It retains the actual NSError domain/description at the failure site.
-- The standalone probe loads only in `iconservicesagent`. It captures metadata
-  at startup and once two seconds later, without hooking or invoking private
-  cache methods. It writes only its own temporary JSON reports and logs.
-- Existing ABI acceptance, type-2 native operation, normal-return verification,
-  pending-cache identity, timeout, `result.isVerified`, and helper/UI
-  acknowledgement gates are unchanged.
-- The existing same-generation shortcut still reuses a transaction previously
-  verified for that generation in the same process; no new shortcut is added.
+Before: missing IFCacheImage initializer surfaces as
+`store-control-failed/detail=3`.
 
-The source patch increments Runtime 204 to 205. The separate probe does not
-replace MarkTheme: `compiledRuntimeBuild` labels its source, whereas
-`observedRuntimeStatus.runtimeBuild` records the installed Runtime's published
-build. Only `belongsToThisProcess: true` associates that state with this PID.
-The standalone capture may occur after another tweak has installed a Hook;
-an IMP in a tweak's image must be interpreted in that context. It is explicitly
-marked as not being at the original validation failure site.
+After, **if store-hook installation succeeds**: the generation adapter rejects
+the unsupported serializer and surfaces as
+`generation-adapter-failed/detail=4`, with underlying generation ABI code 3.
+This is a correctly attributed failure, not successful Apply.
 
-## Apply the source patch
+Native type-2 whole-cache scheduling, normal-return detection, pending-cache
+identity, timeout handling, result.isVerified, helper/UI acknowledgement gates,
+and the existing same-generation reuse of a previously verified transaction
+are unchanged. No acknowledgement is possible merely because store hooks install.
 
-From a clean checkout of the base commit, with the downloaded patch one level
-above the repository:
+## Apply this incremental patch
 
-```sh
-git switch -c iconservice-abi-diagnostics 53bc9b36e773b42bc61b61ccebfe04c129ff58b6
-git apply --check ../marktheme-abi-diagnostics.patch
-git apply ../marktheme-abi-diagnostics.patch
-```
+The delivered patch is relative to the attached diagnostic work, preserved as
+local baseline commit `e88a8b6`. The working checkout available here was
+`/workspace/scratch/257fe7d9a567/MarkTheme`; `~/marktheme-src` was not mounted.
+No upstream commits were reset or pushed.
 
-## Build without owning a Mac
-
-The patch includes a manual GitHub Actions workflow using a macOS runner.
-It has not been run by this assistant, and no upstream changes were pushed.
-
-1. Fork MarkTheme into your GitHub account and apply this patch to your fork's
-   default branch (or merge your diagnostics branch into that branch).
-2. Commit and push the patch, including `.github/workflows/iconservice-abi-probe.yml`.
-3. In the fork, open **Actions → Build IconServices ABI probe → Run workflow**.
-4. After a successful run, download the `MarkTheme-ABI-probe-rootless` artifact
-   and extract the `.deb` from it. A failed run does not yield a usable package.
-
-The workflow builds only the standalone probe, with read-only repository
-permissions. It does not publish a release, connect to your phone, or Apply a
-theme. Actions and Theos revisions are pinned in the workflow.
-
-## Local macOS build
-
-Requires Xcode, Theos, an iOS SDK and `ldid`, with the modern arm64e ABI:
+In your existing checkout, after placing the patch in your home directory:
 
 ```sh
-export THEOS=/absolute/path/to/theos
-make -C tools/iconservice-abi-probe clean
-make -C tools/iconservice-abi-probe package THEOS_PACKAGE_SCHEME=rootless
+cd ~/marktheme-src
+git apply --check ~/marktheme-capability-scope.patch
+git apply ~/marktheme-capability-scope.patch
+git add .gitignore .github/workflows Config.mk iconservice tests/run \
+  tests/MTIconServiceRuntimeTests.m tests/iconservice-capability-contract.py \
+  scripts/ci-remove-obsolete-theos-flag tools/iconservice-abi-probe
+git commit -m "fix(iconservice): scope store validation and isolate missing serializer"
 ```
 
-Expected output **only after a successful build**:
+If your already-corrected workflow differs, git apply --check may report a
+conflict. Preserve those existing fixes and integrate the equivalent workflow
+changes; do not reset your checkout.
 
-```text
-tools/iconservice-abi-probe/packages/com.hmmzzz.marktheme.abiprobe_0.1.0_iphoneos-arm64.deb
-```
+## Focused capture without a Mac
 
-The Debian architecture is `iphoneos-arm64`, and the dylib includes `arm64`
-and `arm64e`. The A13 system daemon needs the modern arm64e slice. Do not
-remove `-fatal_warnings` to suppress an incompatible-arm64e linker warning.
+Push the changes to your fork. If the manual workflow is new, it must exist on
+the fork's default branch to appear in Actions; select your work branch when
+running it.
 
-## Install and collect on the iPhone
+Workflow file: `.github/workflows/iconservice-abi-probe.yml`
+Workflow: **Build IconServices image construction probe**
+Artifact: **MarkTheme-image-construction-probe-rootless**
 
-Transfer the built file from the computer (replace `IPHONE_IP`):
+After CI succeeds, its package is:
+
+`com.hmmzzz.marktheme.abiprobe_0.2.0_iphoneos-arm64.deb`
+
+On the computer:
 
 ```sh
-scp com.hmmzzz.marktheme.abiprobe_0.1.0_iphoneos-arm64.deb mobile@IPHONE_IP:/var/mobile/
-ssh mobile@IPHONE_IP
+scp com.hmmzzz.marktheme.abiprobe_0.2.0_iphoneos-arm64.deb mobile@172.20.10.2:/var/mobile/
+ssh mobile@172.20.10.2
 ```
 
-Run in the phone's SSH shell:
+On the phone:
 
 ```sh
-sudo dpkg -i /var/mobile/com.hmmzzz.marktheme.abiprobe_0.1.0_iphoneos-arm64.deb
+sudo dpkg -i /var/mobile/com.hmmzzz.marktheme.abiprobe_0.2.0_iphoneos-arm64.deb
 sudo /var/jb/usr/bin/launchctl kickstart -k user/501/com.apple.iconservices.iconservicesagent
 sleep 3
-sudo /var/jb/usr/libexec/marktheme-helper status --json
-sudo find /private/var -name marktheme-iconservices-abi.json -type f -exec cat {} \; > /var/mobile/marktheme-abi-report.txt
-wc -c /var/mobile/marktheme-abi-report.txt
+sudo find /private/var -name marktheme-image-construction.json -type f -exec cat {} \; > /var/mobile/marktheme-image-construction-report.txt
+wc -c /var/mobile/marktheme-image-construction-report.txt
 ```
 
-The service restart loads the probe. No theme Apply is needed for metadata.
-Each capture uses a fresh private temporary directory and an exclusive 0600
-file. The collected text can contain multiple JSON documents; each has a PID,
-timestamp and capture phase. From the computer, retrieve it:
+Retrieve from the computer:
 
 ```sh
-scp mobile@IPHONE_IP:/var/mobile/marktheme-abi-report.txt .
+scp mobile@172.20.10.2:/var/mobile/marktheme-image-construction-report.txt .
 ```
 
-Send that file and the helper status output. A zero-length file is not success:
-the probe may not have loaded, or the sandbox may have denied its report write.
-If Apple's `/usr/bin/log` is available on the phone, capture the fallback:
+Send only this focused report. It contains constructor-time and after-startup
+JSON captures. No Apply or repeat broad store-control capture is needed.
+A zero-byte report is not a successful capture. Metadata is also emitted in
+short unified-log records under subsystem com.hmmzzz.marktheme,
+category icon-service-abi.
 
-```sh
-sudo /usr/bin/log show --last 5m --style compact --predicate 'process == "iconservicesagent" AND (subsystem == "com.hmmzzz.marktheme" OR eventMessage CONTAINS "MarkTheme ABI probe")'
-```
-
-Otherwise use macOS Console with the phone connected over USB, filtering for
-`iconservicesagent` and `MarkTheme ABI`. Temporary-file access has not been
-tested on this phone's sandbox.
-
-## Exact probe rollback
+Remove the probe and restart its host:
 
 ```sh
 sudo dpkg -r com.hmmzzz.marktheme.abiprobe
 sudo /var/jb/usr/bin/launchctl kickstart -k user/501/com.apple.iconservices.iconservicesagent
 ```
 
-MarkTheme 0.3.1 and its theme store/generations remain installed. Temporary
-reports remain for review. The probe has no package lifecycle scripts.
+This removes the probe package (including an older version it replaced),
+leaving MarkTheme installed.
 
-## Optional integrated MarkTheme build
+## Complete conventional-rootless package CI (not a compatibility release)
 
-The separate probe is sufficient for the first capture. To build the full
-diagnostic source patch, use the repository's supported macOS/Xcode and
-RootHide Theos setup, while selecting conventional rootless:
+Workflow file: `.github/workflows/marktheme-rootless.yml`
+Workflow: **Build full MarkTheme rootless package**
+Artifact: **MarkTheme-full-rootless-build206-unverified**
+
+It builds app, helper, display runtime and IconServices runtime using Xcode
+and RootHide Theos pinned to
+`88506b2c22e9e07dd4ed055f23c9e398a117a2c7`, including its pinned submodules.
+The full build needs the fork's roothide.h/rootless stub; the probe can use
+upstream Theos because it does not use MarkTheme's path layer.
+
+Both workflows use github.workspace for THEOS, remove only the obsolete
+multiply_defined suppress option, preserve fatal linker warnings and use
+`xcrun lipo <binary> -verify_arch arm64 arm64e`.
+The full workflow checks all four staged binaries and runs the existing
+package audit. The artifact includes a toolchain manifest and SHA256SUMS.
+
+The exact **expected** full-package output after successful CI is:
+
+`packages/com.hmmzzz.marktheme_0.3.1_iphoneos-arm64.deb`
+
+It is not an existing built artifact. Its Debian architecture is iphoneos-arm64;
+its binaries are configured for both arm64 and arm64e. Version stays 0.3.1 to
+satisfy the existing pinned release audit; the runtime build is 206. The artifact
+name and compatibility note distinguish it from the original release.
+
+Equivalent build command on a prepared macOS/Xcode runner:
 
 ```sh
 export THEOS=/absolute/path/to/roothide-theos
-PACKAGE_VERSION=0.3.1+abi1 ./scripts/build-packages rootless
+python3 scripts/ci-remove-obsolete-theos-flag "$THEOS"
 MARKTHEME_LOCAL_TEST_ENV_READY=1 ./tests/run
+FINALPACKAGE=1 ADDITIONAL_LDFLAGS=-Wl,-fatal_warnings ./scripts/build-packages rootless
 ```
 
-Expected full-package path after success:
-`packages/com.hmmzzz.marktheme_0.3.1+abi1_iphoneos-arm64.deb`.
-Keep the original rootless release `.deb` before replacing MarkTheme.
+No full-package installation is needed to collect the focused report.
+If testing this partial build, first retain the **original** rootless 0.3.1
+release package separately as `/var/mobile/marktheme-rollback-0.3.1.deb`.
+Do not overwrite that backup with the identically versioned CI package.
+
+Transfer the CI package to /var/mobile, then run:
 
 ```sh
-# Phone: optional integrated diagnostics install
-sudo dpkg -i /var/mobile/com.hmmzzz.marktheme_0.3.1+abi1_iphoneos-arm64.deb
-sudo /var/jb/usr/bin/launchctl kickstart -k user/501/com.apple.iconservices.iconservicesagent
-sudo /var/jb/usr/libexec/marktheme-helper reload-desktop --json
-
-# Phone: restore original release package
+sudo /var/jb/usr/libexec/marktheme-helper status --json
 sudo dpkg -i /var/mobile/com.hmmzzz.marktheme_0.3.1_iphoneos-arm64.deb
 sudo /var/jb/usr/bin/launchctl kickstart -k user/501/com.apple.iconservices.iconservicesagent
 sudo /var/jb/usr/libexec/marktheme-helper reload-desktop --json
+sudo /var/jb/usr/libexec/marktheme-helper status --json
 ```
 
-`marktheme-helper rollback --json` rolls back a theme generation, not binaries;
-it is not the package rollback command.
+Reopen MarkTheme and tap Apply for the theme, then:
 
-## Validation and outstanding work
+```sh
+sudo /var/jb/usr/libexec/marktheme-helper status --json
+```
 
-- Objective-C syntax/type checks passed earlier in this task against an iOS
-  SDK with `-Wall -Wextra -Werror` for the diagnostics, invalidator, bootstrap,
-  probe and updated test source. The temporary workspace later reset; these
-  source changes were restored against the same pinned base commit.
-- Added diagnostic tests: the three existing ClearCacheOperation encodings,
-  incompatible arguments/return encodings, wrong IMP image, missing class,
-  class/instance distinction, both error-3 domains, valid JSON and no private
-  method invocations. These are diagnostic tests, not native transaction tests.
-- Host test execution remains blocked by missing Xcode `xcrun`. The new
-  assertions are not claimed as executed. The existing Apply test rejecting
-  absent IconServices acknowledgement remains unchanged.
-- Production validation predicates, transaction callbacks and acknowledgement
-  logic were compared with the base commit and remain unchanged.
-- **No usable A13 `.deb` is supplied.** Both attempted Linux toolchains emitted
-  the old arm64e ABI. The final Makefile makes that warning fatal. No package
-  with that warning should be installed. The macOS workflow is provided but
-  has not been executed here.
-- Actual iOS 18.1.1-compatible ABI fixtures, a compatibility adapter and native
-  transaction/acknowledgement regression tests await the phone's report. No
-  invented compatible signature is included. Device regression checks on
-  supported iOS 17/18 paths are still required before a compatibility release.
+On the reported ABI, failure is still expected. A cache-control stage change
+alone does not establish compatibility.
 
-## Every changed file
+Restore the original package (without purging theme data):
 
-| File | Change |
-| --- | --- |
-| `Config.mk` | Runtime build 204 → 205. |
-| `iconservice/Makefile` | Link diagnostic implementation. |
-| `iconservice/MTIconServiceStoreInvalidator.m` | Log installation failures, including upstream NSError domain, without changing predicates. |
-| `iconservice/MTIconServiceBootstrap.m` | Include error description in log. |
-| `iconservice/MTIconServiceABIDiagnostics.h` | New diagnostic declarations. |
-| `iconservice/MTIconServiceABIDiagnostics.m` | New runtime metadata collection and structured logging. |
-| `tests/MTIconServiceRuntimeTests.m` | Diagnostic cases. |
-| `tests/run` | Link diagnostics and update build expectation. |
-| `tools/iconservice-abi-probe/Makefile` | Separate rootless probe build; ABI warnings fatal. |
-| `tools/iconservice-abi-probe/control` | Separate diagnostic package identity. |
-| `tools/iconservice-abi-probe/MarkThemeABIProbe.plist` | Exact iconservicesagent filter. |
-| `tools/iconservice-abi-probe/Probe.m` | Two bounded metadata captures and report output. |
-| `tools/iconservice-abi-probe/README.md` | Findings, build/install/collection/rollback instructions and limits. |
-| `.github/workflows/iconservice-abi-probe.yml` | Optional manual macOS build and artifact download. |
+```sh
+sudo dpkg -i /var/mobile/marktheme-rollback-0.3.1.deb
+sudo /var/jb/usr/bin/launchctl kickstart -k user/501/com.apple.iconservices.iconservicesagent
+sudo /var/jb/usr/libexec/marktheme-helper reload-desktop --json
+sudo /var/jb/usr/libexec/marktheme-helper status --json
+```
 
-No changes to `helper/main.m`, `runtime/MTRuntimeInvalidation.m`,
-`store/MTRuntimeHelperClient.m` or `workflow/MTThemeApplyService.m`.
+Helper rollback changes theme generations; it does not restore package binaries.
+
+## Validation
+
+Passed locally:
+- Six portable source-contract tests, including independent store validation,
+  required serializer/rehydrator stages, native transaction safeguards,
+  acknowledgement guard, focused probe scope and narrowly removed linker flag.
+- Existing package lifecycle contract test.
+- Shell/workflow run-step syntax, workflow YAML and plist parsing, git diff check.
+- Exact comparison with the preserved diagnostics baseline: process identity
+  predicate, private replacement construction, all store transaction code,
+  bootstrap, helper, runtime invalidation, helper client and Apply service
+  remain unchanged except the explicit store validation call replacement.
+- The linker-option script was exercised against the pinned RootHide Theos;
+  only its darwin_tail.mk obsolete option changed.
+
+Added macOS host assertions for the two exact legacy constructor encodings,
+focused capture scope and constructor capability reporting. Existing tests for
+wrong encodings, wrong IMP images, absent methods/classes and class/instance
+distinction remain.
+
+Not run: Objective-C compilation/host execution and full package build
+(`xcrun` unavailable); generated profile check (Ruby unavailable).
+Both macOS workflows include the required native tooling, but neither workflow
+was triggered here. The portable checks are source contracts, not simulated
+native transaction tests.
+
+The requested accepted iOS 18.1.1 adapter case and end-to-end native transaction
+tests cannot honestly be added as passing tests until a supported serializer
+is established. No fabricated compatible fixture is included.
+
+## Files changed relative to the preserved diagnostics work
+
+- `iconservice/MTIconServiceABI.h`
+- `iconservice/MTIconServiceABI.m`
+- `iconservice/MTIconServiceStoreInvalidator.m`
+- `iconservice/MTIconServiceGenerationAdapter.m`
+- `iconservice/MTIconServiceABIDiagnostics.h`
+- `iconservice/MTIconServiceABIDiagnostics.m`
+- `Config.mk`
+- `tests/MTIconServiceRuntimeTests.m`
+- `tests/iconservice-capability-contract.py` (new)
+- `tests/run`
+- `tools/iconservice-abi-probe/Makefile`
+- `tools/iconservice-abi-probe/control`
+- `tools/iconservice-abi-probe/Probe.m`
+- `tools/iconservice-abi-probe/README.md`
+- `.github/workflows/iconservice-abi-probe.yml`
+- `.github/workflows/marktheme-rootless.yml` (new)
+- `scripts/ci-remove-obsolete-theos-flag` (new)
+- `.gitignore`

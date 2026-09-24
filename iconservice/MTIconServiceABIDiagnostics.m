@@ -93,12 +93,66 @@ static NSArray *MTClassHierarchy(Class cls) {
     return hierarchy;
 }
 
+static NSDictionary *MTImageConstructionCapability(NSArray *checks) {
+    BOOL cacheInitializer = NO;
+    BOOL dataInitializer = NO;
+    for (NSDictionary *check in checks) {
+        if ([check[@"class"] isEqual:@"IFCacheImage"]) {
+            cacheInitializer = [check[@"matchesExistingValidation"] boolValue];
+        } else if ([check[@"class"] isEqual:@"IFImage"]) {
+            dataInitializer = [check[@"matchesExistingValidation"] boolValue];
+        }
+    }
+    // These are consecutive serializer/rehydrator stages, not alternatives.
+    // Metadata can identify a candidate path, not prove its transaction ran.
+    return @{
+        @"selectionScope" : @"constructor ABI only; not runtime readiness",
+        @"selectedPath" : cacheInitializer && dataInitializer
+            ? @"legacy-cache-image-bitmap-data" : @"unavailable",
+        @"cacheImageInitializerAvailable" : @(cacheInitializer),
+        @"imageDataInitializerAvailable" : @(dataInitializer),
+        @"requiresBitmapDataSerializer" : @YES,
+    };
+}
+
+NSDictionary<NSString *, id> *MTIconServiceImageConstructionDiagnosticReport(void) {
+    NSString *foundation = @"/System/Library/PrivateFrameworks/IconFoundation.framework/IconFoundation";
+    NSArray *expectations = @[
+        @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:iconSize:", @"@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52"],
+        @[@"IFImage", @"initWithData:uuid:validationToken:", @"@40@0:8@16@24@32"],
+    ];
+    NSMutableDictionary *classes = [NSMutableDictionary dictionary];
+    NSMutableArray *checks = [NSMutableArray array];
+    for (NSArray<NSString *> *expected in expectations) {
+        Class cls = objc_lookUpClass(expected[0].UTF8String);
+        classes[expected[0]] = @{
+            @"exists" : @(cls != Nil), @"hierarchy" : MTClassHierarchy(cls),
+        };
+        NSMutableDictionary *check = [MTIconServiceMethodDiagnostic(
+            cls, expected[1], NO, expected[2].UTF8String, foundation) mutableCopy];
+        check[@"classMethodAlternative"] = MTIconServiceMethodDiagnostic(
+            cls, expected[1], YES, expected[2].UTF8String, foundation);
+        [checks addObject:check];
+    }
+    return @{
+        @"schemaVersion" : @1,
+        @"scope" : @"image-construction",
+        @"compiledRuntimeBuild" : @(MARKTHEME_RUNTIME_BUILD_NUMBER),
+        @"processIdentifier" : @(getpid()),
+        @"processName" : NSProcessInfo.processInfo.processName,
+        @"osVersion" : NSProcessInfo.processInfo.operatingSystemVersionString,
+        @"serviceName" : MTDiagnosticString(getenv("XPC_SERVICE_NAME")),
+        @"checks" : checks,
+        @"classes" : classes,
+        @"imageConstruction" : MTImageConstructionCapability(checks),
+    };
+}
+
 NSDictionary<NSString *, id> *MTIconServiceABIDiagnosticReport(NSError *failure) {
     NSString *agent = @"/System/Library/CoreServices/iconservicesagent";
     NSString *icons = @"/System/Library/PrivateFrameworks/IconServices.framework/IconServices";
     NSString *foundation = @"/System/Library/PrivateFrameworks/IconFoundation.framework/IconFoundation";
-    // Mirror every installation gate, including the upstream error-domain/3
-    // that installWithError: can propagate before inspecting the cache ABI.
+    // Keep generation and store-control requirements identifiable separately.
     NSArray *expectations = @[
         @[@"ISGenerationRequest", @"generateImageReturningRecordIdentifiers:", @"@24@0:8^@16", icons],
         @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:iconSize:", @"@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52", foundation],
@@ -147,6 +201,7 @@ NSDictionary<NSString *, id> *MTIconServiceABIDiagnosticReport(NSError *failure)
         @"checks" : checks,
         @"classes" : classes,
         @"candidateClasses" : candidates,
+        @"imageConstruction" : MTImageConstructionCapability(checks),
     } mutableCopy];
     // Read the installed MarkTheme build independently of the probe's build.
     // This is advisory metadata, never an acknowledgement or readiness write.
@@ -184,6 +239,22 @@ void MTIconServiceLogABIDiagnosticReport(NSDictionary<NSString *, id> *report) {
         [records addObject:instance];
         if (check[@"classMethodAlternative"] != nil) {
             [records addObject:check[@"classMethodAlternative"]];
+        }
+    }
+    if ([report[@"scope"] isEqual:@"image-construction"]) {
+        NSDictionary *classes = report[@"classes"];
+        for (NSString *rootClass in classes) {
+            for (NSDictionary *entry in classes[rootClass][@"hierarchy"]) {
+                for (NSString *kind in @[@"instanceMethods", @"classMethods"]) {
+                    for (NSDictionary *method in entry[kind]) {
+                        NSMutableDictionary *record = [method mutableCopy];
+                        record[@"rootClass"] = rootClass;
+                        record[@"declaringClass"] = entry[@"class"];
+                        record[@"kind"] = kind;
+                        [records addObject:record];
+                    }
+                }
+            }
         }
     }
     for (NSDictionary *record in records) {

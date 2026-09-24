@@ -1,7 +1,7 @@
 ARCHS = arm64 arm64e
 TARGET = iphone:clang:latest:17.0
 THEOS_PACKAGE_SCHEME = rootless
-PACKAGE_VERSION = 0.1.0
+PACKAGE_VERSION = 0.2.0
 FINALPACKAGE = 1
 
 # The report separately reads the installed Runtime build (possibly 204).

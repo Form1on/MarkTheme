@@ -1,0 +1,69 @@
+name: Build full MarkTheme rootless package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rootless:
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      THEOS: ${{ github.workspace }}/.ci-theos
+      MARKTHEME_LOCAL_TEST_ENV_READY: '1'
+      FINALPACKAGE: '1'
+      ADDITIONAL_LDFLAGS: -Wl,-fatal_warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Full MarkTheme imports roothide.h even for the rootless stub. Use the
+      # fork's headers/libraries, not the standalone probe's upstream Theos.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: roothide/theos
+          ref: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
+          path: .ci-theos
+          submodules: recursive
+          persist-credentials: false
+      - name: Prepare Xcode and RootHide Theos
+        run: |
+          brew install ldid xz ripgrep
+          python3 scripts/ci-remove-obsolete-theos-flag "$THEOS"
+          xcrun clang --version
+          xcrun --sdk iphoneos --show-sdk-path
+          mkdir -p artifacts
+          {
+            git rev-parse HEAD
+            git -C "$THEOS" rev-parse HEAD
+            git -C "$THEOS" submodule status --recursive
+            xcodebuild -version
+            xcrun clang --version
+          } > artifacts/build-toolchain.txt
+      - name: Run host and static contracts
+        run: |
+          python3 tests/iconservice-capability-contract.py
+          ./scripts/generate-runtime-profiles --check
+          ./tests/run
+      - name: Build and audit complete conventional-rootless package
+        run: |
+          ./scripts/build-packages rootless
+          payload=.theos/_/var/jb
+          for binary in \
+            "$payload/Applications/MarkTheme.app/MarkTheme" \
+            "$payload/usr/libexec/marktheme-helper" \
+            "$payload/Library/MobileSubstrate/DynamicLibraries/MarkThemeRuntime.dylib" \
+            "$payload/Library/MobileSubstrate/DynamicLibraries/MarkThemeIconServiceRuntime.dylib"; do
+            xcrun lipo "$binary" -verify_arch arm64 arm64e
+          done
+          cp packages/com.hmmzzz.marktheme_0.3.1_iphoneos-arm64.deb artifacts/
+          shasum -a 256 artifacts/*.deb > artifacts/SHA256SUMS
+          echo 'Build 206 scopes validation; iOS 18.1.1 image serialization remains unsupported.' > artifacts/COMPATIBILITY.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: MarkTheme-full-rootless-build206-unverified
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14

@@ -25,8 +25,9 @@ static BOOL MTWriteAll(int fd, NSData *data) {
 
 static void MTCapture(NSString *phase) {
     @autoreleasepool {
-        NSMutableDictionary *report = [MTIconServiceABIDiagnosticReport(nil) mutableCopy];
-        report[@"probeVersion"] = @"0.1.0";
+        NSMutableDictionary *report =
+            [MTIconServiceImageConstructionDiagnosticReport() mutableCopy];
+        report[@"probeVersion"] = @"0.2.0";
         report[@"capturePhase"] = phase;
         report[@"capturedAt"] = @([NSDate.date timeIntervalSince1970]);
         // Capture time may precede or follow MarkTheme's constructor. An IMP
@@ -40,7 +41,7 @@ static void MTCapture(NSString *phase) {
         // Use the agent's sandbox-selected temporary directory. A fresh 0700
         // directory and O_EXCL/O_NOFOLLOW file avoid symlink replacement.
         NSString *template = [NSTemporaryDirectory()
-            stringByAppendingPathComponent:@"marktheme-iconservices-abi.XXXXXX"];
+            stringByAppendingPathComponent:@"marktheme-image-construction.XXXXXX"];
         char *path = strdup(template.fileSystemRepresentation);
         if (path == NULL) return;
         if (mkdtemp(path) == NULL) {
@@ -50,7 +51,7 @@ static void MTCapture(NSString *phase) {
         }
         NSString *file = [[NSFileManager.defaultManager
             stringWithFileSystemRepresentation:path length:strlen(path)]
-            stringByAppendingPathComponent:@"marktheme-iconservices-abi.json"];
+            stringByAppendingPathComponent:@"marktheme-image-construction.json"];
         int fd = open(file.fileSystemRepresentation,
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         BOOL written = fd >= 0 && MTWriteAll(fd, data);
