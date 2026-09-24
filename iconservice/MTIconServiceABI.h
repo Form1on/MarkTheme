@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <objc/runtime.h>
+#import "MTIconServiceImageConstruction.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -54,5 +55,17 @@ FOUNDATION_EXPORT id _Nullable MTIconServiceABICreateReplacementImage(
     id originalImage,
     MTIconServiceImageGeometry geometry,
     NSError **error);
+
+#if defined(MT_HOST_TESTING)
+// Exercise the production resolver and construction sequence with host-owned
+// fixture classes. These entry points do not exist in device builds.
+FOUNDATION_EXPORT MTIconServiceImageConstructionPath
+    MTIconServiceABITestImageConstructionPath(Class cacheClass, Class imageClass,
+                                             NSString *expectedImage);
+FOUNDATION_EXPORT id _Nullable MTIconServiceABITestCreateReplacementImage(
+    Class cacheClass, Class imageClass, NSString *expectedImage,
+    CGImageRef image, id originalImage, MTIconServiceImageGeometry geometry,
+    NSError **error);
+#endif
 
 NS_ASSUME_NONNULL_END

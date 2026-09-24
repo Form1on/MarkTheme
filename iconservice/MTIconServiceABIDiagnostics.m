@@ -1,4 +1,5 @@
 #import "MTIconServiceABIDiagnostics.h"
+#import "MTIconServiceImageConstruction.h"
 
 #import <dlfcn.h>
 #import <notify.h>
@@ -94,23 +95,30 @@ static NSArray *MTClassHierarchy(Class cls) {
 }
 
 static NSDictionary *MTImageConstructionCapability(NSArray *checks) {
-    BOOL cacheInitializer = NO;
-    BOOL dataInitializer = NO;
+    NSMutableDictionary *available = [NSMutableDictionary dictionary];
     for (NSDictionary *check in checks) {
-        if ([check[@"class"] isEqual:@"IFCacheImage"]) {
-            cacheInitializer = [check[@"matchesExistingValidation"] boolValue];
-        } else if ([check[@"class"] isEqual:@"IFImage"]) {
-            dataInitializer = [check[@"matchesExistingValidation"] boolValue];
+        if ([check[@"class"] isEqual:@"IFCacheImage"] ||
+            [check[@"class"] isEqual:@"IFImage"]) {
+            available[check[@"selector"]] = check[@"matchesExistingValidation"];
         }
     }
-    // These are consecutive serializer/rehydrator stages, not alternatives.
-    // Metadata can identify a candidate path, not prove its transaction ran.
+    BOOL legacy = [available[@"initWithCGImage:scale:minimumSize:placeholder:iconSize:"] boolValue];
+    BOOL split = [available[@"initWithCGImage:scale:minimumSize:placeholder:"] boolValue];
+    BOOL setter = [available[@"setIconSize:"] boolValue];
+    BOOL bitmap = [available[@"bitmapData"] boolValue];
+    BOOL rehydrator = [available[@"initWithData:uuid:validationToken:"] boolValue];
+    MTIconServiceImageConstructionPath path = MTIconServiceSelectImageConstruction(
+        legacy, split, setter, bitmap, rehydrator);
+    // Metadata identifies a construction capability, never a completed native
+    // cache transaction. Use the same legacy-first selection as production.
     return @{
-        @"selectionScope" : @"constructor ABI only; not runtime readiness",
-        @"selectedPath" : cacheInitializer && dataInitializer
-            ? @"legacy-cache-image-bitmap-data" : @"unavailable",
-        @"cacheImageInitializerAvailable" : @(cacheInitializer),
-        @"imageDataInitializerAvailable" : @(dataInitializer),
+        @"selectionScope" : @"image construction ABI only; not runtime readiness",
+        @"selectedPath" : [NSString stringWithUTF8String:MTIconServiceImageConstructionPathName(path)],
+        @"cacheImageInitializerAvailable" : @(legacy),
+        @"splitCacheImageInitializerAvailable" : @(split),
+        @"iconSizeSetterAvailable" : @(setter),
+        @"bitmapDataAvailable" : @(bitmap),
+        @"imageDataInitializerAvailable" : @(rehydrator),
         @"requiresBitmapDataSerializer" : @YES,
     };
 }
@@ -119,13 +127,16 @@ NSDictionary<NSString *, id> *MTIconServiceImageConstructionDiagnosticReport(voi
     NSString *foundation = @"/System/Library/PrivateFrameworks/IconFoundation.framework/IconFoundation";
     NSArray *expectations = @[
         @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:iconSize:", @"@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52"],
+        @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:", @"@52@0:8^{CGImage=}16d24{CGSize=dd}32B48"],
+        @[@"IFCacheImage", @"setIconSize:", @"v32@0:8{CGSize=dd}16"],
+        @[@"IFCacheImage", @"bitmapData", @"@16@0:8"],
         @[@"IFImage", @"initWithData:uuid:validationToken:", @"@40@0:8@16@24@32"],
     ];
     NSMutableDictionary *classes = [NSMutableDictionary dictionary];
     NSMutableArray *checks = [NSMutableArray array];
     for (NSArray<NSString *> *expected in expectations) {
         Class cls = objc_lookUpClass(expected[0].UTF8String);
-        classes[expected[0]] = @{
+        if (classes[expected[0]] == nil) classes[expected[0]] = @{
             @"exists" : @(cls != Nil), @"hierarchy" : MTClassHierarchy(cls),
         };
         NSMutableDictionary *check = [MTIconServiceMethodDiagnostic(
@@ -156,6 +167,9 @@ NSDictionary<NSString *, id> *MTIconServiceABIDiagnosticReport(NSError *failure)
     NSArray *expectations = @[
         @[@"ISGenerationRequest", @"generateImageReturningRecordIdentifiers:", @"@24@0:8^@16", icons],
         @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:iconSize:", @"@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52", foundation],
+        @[@"IFCacheImage", @"initWithCGImage:scale:minimumSize:placeholder:", @"@52@0:8^{CGImage=}16d24{CGSize=dd}32B48", foundation],
+        @[@"IFCacheImage", @"setIconSize:", @"v32@0:8{CGSize=dd}16", foundation],
+        @[@"IFCacheImage", @"bitmapData", @"@16@0:8", foundation],
         @[@"IFImage", @"initWithData:uuid:validationToken:", @"@40@0:8@16@24@32", foundation],
         @[@"IconCacheService", @"initWithServiceName:", @"@24@0:8@16", agent],
         @[@"ClearCacheOperation", @"run", @"v16@0:8", agent],

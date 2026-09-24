@@ -8,6 +8,8 @@
 #import "MTRuntimeSnapshot.h"
 #import "MTRuntimeState.h"
 
+extern NSUInteger MTRunIconServiceConstructionTests(void);
+
 static NSUInteger MTIconServiceAssertionCount;
 
 static void MTIconServiceAssert(BOOL condition, NSString *message) {
@@ -394,16 +396,19 @@ static void MTIconServiceRunABIDiagnosticTests(void) {
     NSDictionary *focused = MTIconServiceImageConstructionDiagnosticReport();
     NSDictionary *classes = focused[@"classes"];
     MTIconServiceAssert(classes.count == 2 && classes[@"IFCacheImage"] != nil &&
-        classes[@"IFImage"] != nil && [focused[@"checks"] count] == 2 &&
+        classes[@"IFImage"] != nil && [focused[@"checks"] count] == 5 &&
         [NSJSONSerialization isValidJSONObject:focused],
         @"Follow-up capture must be restricted to the two image hierarchies");
     NSDictionary *capability = focused[@"imageConstruction"];
-    BOOL bothConstructors =
-        [capability[@"cacheImageInitializerAvailable"] boolValue] &&
-        [capability[@"imageDataInitializerAvailable"] boolValue];
+    MTIconServiceImageConstructionPath expectedPath = MTIconServiceSelectImageConstruction(
+        [capability[@"cacheImageInitializerAvailable"] boolValue],
+        [capability[@"splitCacheImageInitializerAvailable"] boolValue],
+        [capability[@"iconSizeSetterAvailable"] boolValue],
+        [capability[@"bitmapDataAvailable"] boolValue],
+        [capability[@"imageDataInitializerAvailable"] boolValue]);
     MTIconServiceAssert([capability[@"selectedPath"] isEqual:
-        bothConstructors ? @"legacy-cache-image-bitmap-data" : @"unavailable"],
-        @"A data rehydrator alone must not advertise a bitmap serializer");
+        [NSString stringWithUTF8String:MTIconServiceImageConstructionPathName(expectedPath)]],
+        @"Diagnostics must use the production legacy-first capability selection");
     for (NSString *domain in @[@"com.hmmzzz.marktheme.icon-service-abi",
                                @"com.hmmzzz.marktheme.icon-service-store-invalidator"]) {
         NSError *failure = [NSError errorWithDomain:domain code:3 userInfo:nil];
@@ -418,7 +423,7 @@ static void MTIconServiceRunABIDiagnosticTests(void) {
 }
 
 NSUInteger MTRunIconServiceRuntimeTests(void) {
-    MTIconServiceAssertionCount = 0;
+    MTIconServiceAssertionCount = MTRunIconServiceConstructionTests();
     MTIconServiceRunABIDiagnosticTests();
     MTIconServiceAssert(
         MTIconServiceConfiguredRuntimeMode() ==

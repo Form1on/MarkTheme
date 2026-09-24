@@ -31,18 +31,20 @@ class CapabilityContracts(unittest.TestCase):
         abi = source("iconservice/MTIconServiceABI.m")
         for required in (
             "!MTIconServiceABIValidateProcess(error)",
-            "cacheInitializer, MTCacheImageInitializerTypeEncoding",
-            "dataInitializer, MTImageDataInitializerTypeEncoding",
+            "MTCacheImageInitializerTypeEncoding, expectedImage",
+            "MTImageDataInitializerTypeEncoding, expectedImage",
             "strcmp(actual, encoding) == 0", "implementation != NULL",
             "dladdr((const void *)implementation, &info)",
             "isEqualToString:imagePath",
         ):
             self.assertIn(required, abi)
-        construct = abi.split("id MTIconServiceABICreateReplacementImage(", 1)[1]
-        self.assertIn("cacheImageClass == Nil || cacheMethod == NULL ||", construct)
+        construct = abi.split("static id MTIconServiceCreateReplacementImage(", 1)[1]
+        self.assertIn("construction.path == MTIconServiceImageConstructionUnavailable", construct)
         self.assertIn("imageClass == Nil || dataMethod == NULL", construct)
         self.assertLess(construct.index("id temporary ="), construct.index("id bitmapData ="))
         self.assertLess(construct.index("id bitmapData ="), construct.index("id replacement ="))
+        self.assertLess(construct.index("((MTSizeSetterFunction)"), construct.index("id bitmapData ="))
+        self.assertIn("__attribute__((ns_consumed)) id,\n    SEL, CGImageRef, double, CGSize, BOOL)", abi)
         self.assertIn("bitmapData, originalUUID, validationToken", construct)
 
     def test_native_clear_checks_and_completion_remain(self):
@@ -83,6 +85,15 @@ class CapabilityContracts(unittest.TestCase):
             "MTIconServiceABIDiagnosticReport(NSError", 1)[0]
         self.assertNotIn("ClearCacheOperation", focused)
         self.assertNotIn("objc_copyClassList", focused)
+
+    def test_compiled_construction_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = str(pathlib.Path(directory) / "construction-policy")
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            "-I", str(ROOT / "iconservice"),
+                            str(ROOT / "tests/MTIconServiceImageConstructionPolicyTests.c"),
+                            "-o", binary], check=True)
+            subprocess.run([binary], check=True)
 
     def test_only_obsolete_linker_option_is_removed(self):
         with tempfile.TemporaryDirectory() as directory:

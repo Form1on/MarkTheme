@@ -1,5 +1,9 @@
 # iOS 18.1.1 image-construction follow-up (build 206)
 
+This document records the build-206 investigation. The captured constructors
+are now implemented in [Runtime 207](../../docs/ICON_SERVICE_IOS18_COMPATIBILITY.md).
+Use that document for the current full-package build and installation procedure.
+
 This is a **partial validation fix, not a completed iOS 18.1.1 compatibility
 release**. No supported replacement serializer has yet been observed. Apply
 must still fail on the reported device. The full package workflow is prepared,

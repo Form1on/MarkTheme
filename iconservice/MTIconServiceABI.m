@@ -3,6 +3,7 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <os/lock.h>
+#import <os/log.h>
 
 #include <limits.h>
 #include <math.h>
@@ -35,6 +36,12 @@ static const char *const MTCacheImageInitializerName =
     "initWithCGImage:scale:minimumSize:placeholder:iconSize:";
 static const char *const MTCacheImageInitializerTypeEncoding =
     "@68@0:8^{CGImage=}16d24{CGSize=dd}32B48{CGSize=dd}52";
+static const char *const MTSplitCacheImageInitializerName =
+    "initWithCGImage:scale:minimumSize:placeholder:";
+static const char *const MTSplitCacheImageInitializerTypeEncoding =
+    "@52@0:8^{CGImage=}16d24{CGSize=dd}32B48";
+static const char *const MTIconSizeSetterName = "setIconSize:";
+static const char *const MTIconSizeSetterTypeEncoding = "v32@0:8{CGSize=dd}16";
 static const char *const MTImageClassName = "IFImage";
 static const char *const MTImageDataInitializerName =
     "initWithData:uuid:validationToken:";
@@ -62,10 +69,16 @@ static os_unfair_lock MTIconServiceMethodCacheLock = OS_UNFAIR_LOCK_INIT;
 // immutable afterwards.
 static Class MTValidatedBundleIconClass;
 static Class MTValidatedDescriptorClass;
-static Class MTValidatedCacheImageClass;
-static Method MTValidatedCacheImageInitializer;
-static Class MTValidatedImageClass;
-static Method MTValidatedImageDataInitializer;
+typedef struct MTIconServiceImageConstructionABI {
+    MTIconServiceImageConstructionPath path;
+    Class cacheImageClass;
+    Class imageClass;
+    Method cacheInitializer;
+    Method splitInitializer;
+    Method iconSizeSetter;
+    Method dataInitializer;
+} MTIconServiceImageConstructionABI;
+static MTIconServiceImageConstructionABI MTValidatedImageConstruction;
 
 typedef id (*MTObjectGetterFunction)(id, SEL);
 typedef CGSize (*MTSizeGetterFunction)(id, SEL);
@@ -73,6 +86,7 @@ typedef double (*MTDoubleGetterFunction)(id, SEL);
 typedef BOOL (*MTBoolGetterFunction)(id, SEL);
 typedef CGImageRef (*MTCGImageGetterFunction)(id, SEL);
 typedef void (*MTBoolSetterFunction)(id, SEL, BOOL);
+typedef void (*MTSizeSetterFunction)(id, SEL, CGSize);
 // These IMPs implement Objective-C init-family methods. ARC requires the
 // function type used for a direct IMP call to preserve init's consumed
 // receiver and retained result conventions; a mismatch is undefined behavior
@@ -80,6 +94,10 @@ typedef void (*MTBoolSetterFunction)(id, SEL, BOOL);
 typedef id (*MTCacheImageInitializerFunction)(
     __attribute__((ns_consumed)) id,
     SEL, CGImageRef, double, CGSize, BOOL, CGSize)
+    __attribute__((ns_returns_retained));
+typedef id (*MTSplitCacheImageInitializerFunction)(
+    __attribute__((ns_consumed)) id,
+    SEL, CGImageRef, double, CGSize, BOOL)
     __attribute__((ns_returns_retained));
 typedef id (*MTImageDataInitializerFunction)(
     __attribute__((ns_consumed)) id, SEL, id, id, id)
@@ -125,6 +143,36 @@ static BOOL MTIconServiceMethodMatches(Method method,
         info.dli_fname != NULL &&
         [[NSString stringWithUTF8String:info.dli_fname]
             isEqualToString:imagePath];
+}
+
+static MTIconServiceImageConstructionABI MTIconServiceResolveImageConstruction(
+    Class cacheClass, Class imageClass, NSString *expectedImage) {
+    MTIconServiceImageConstructionABI ABI = {0};
+    if (cacheClass == Nil || imageClass == Nil ||
+        class_isMetaClass(cacheClass) || class_isMetaClass(imageClass)) return ABI;
+    ABI.cacheImageClass = cacheClass;
+    ABI.imageClass = imageClass;
+    // class_getInstanceMethod deliberately resolves inherited implementations.
+    ABI.cacheInitializer = class_getInstanceMethod(
+        cacheClass, sel_registerName(MTCacheImageInitializerName));
+    ABI.splitInitializer = class_getInstanceMethod(
+        cacheClass, sel_registerName(MTSplitCacheImageInitializerName));
+    ABI.iconSizeSetter = class_getInstanceMethod(
+        cacheClass, sel_registerName(MTIconSizeSetterName));
+    Method bitmapMethod = class_getInstanceMethod(cacheClass, sel_registerName("bitmapData"));
+    ABI.dataInitializer = class_getInstanceMethod(
+        imageClass, sel_registerName(MTImageDataInitializerName));
+    ABI.path = MTIconServiceSelectImageConstruction(
+        MTIconServiceMethodMatches(ABI.cacheInitializer,
+            MTCacheImageInitializerTypeEncoding, expectedImage),
+        MTIconServiceMethodMatches(ABI.splitInitializer,
+            MTSplitCacheImageInitializerTypeEncoding, expectedImage),
+        MTIconServiceMethodMatches(ABI.iconSizeSetter,
+            MTIconSizeSetterTypeEncoding, expectedImage),
+        MTIconServiceMethodMatches(bitmapMethod, "@16@0:8", expectedImage),
+        MTIconServiceMethodMatches(ABI.dataInitializer,
+            MTImageDataInitializerTypeEncoding, expectedImage));
+    return ABI;
 }
 
 static Method MTIconServiceExactMethod(id object,
@@ -267,23 +315,14 @@ BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
     if (generationMethodOut != NULL) *generationMethodOut = NULL;
     MTValidatedBundleIconClass = Nil;
     MTValidatedDescriptorClass = Nil;
-    MTValidatedCacheImageClass = Nil;
-    MTValidatedCacheImageInitializer = NULL;
-    MTValidatedImageClass = Nil;
-    MTValidatedImageDataInitializer = NULL;
+    MTValidatedImageConstruction = (MTIconServiceImageConstructionABI){0};
     if (!MTIconServiceABIValidateProcess(error)) return NO;
     Class generationClass = objc_getClass(MTGenerationClassName);
     Method generationMethod = generationClass == Nil ? NULL :
         class_getInstanceMethod(
             generationClass, sel_registerName(MTGenerationSelectorName));
     Class cacheImageClass = objc_getClass(MTCacheImageClassName);
-    Method cacheInitializer = cacheImageClass == Nil ? NULL :
-        class_getInstanceMethod(
-            cacheImageClass, sel_registerName(MTCacheImageInitializerName));
     Class imageClass = objc_getClass(MTImageClassName);
-    Method dataInitializer = imageClass == Nil ? NULL :
-        class_getInstanceMethod(
-            imageClass, sel_registerName(MTImageDataInitializerName));
     Class bundleIconClass = objc_getClass(MTBundleIconClassName);
     Class descriptorClass = objc_getClass(MTDescriptorClassName);
     if (bundleIconClass == Nil || descriptorClass == Nil ||
@@ -294,27 +333,20 @@ BOOL MTIconServiceABIValidateRuntime(Method *generationMethodOut,
             @"ISGenerationRequest method or request class ABI changed.");
         return NO;
     }
-    if (!MTIconServiceMethodMatches(
-            cacheInitializer, MTCacheImageInitializerTypeEncoding,
-            MTIconServiceExpectedIconFoundationPath)) {
+    MTIconServiceImageConstructionABI construction =
+        MTIconServiceResolveImageConstruction(cacheImageClass, imageClass,
+            MTIconServiceExpectedIconFoundationPath);
+    if (construction.path == MTIconServiceImageConstructionUnavailable) {
         MTIconServiceABISetError(error, 3,
-            @"IFCacheImage initWithCGImage:scale:minimumSize:placeholder:iconSize: "
-             "serializer ABI is unavailable; IFImage data initialization alone is insufficient.");
-        return NO;
-    }
-    if (!MTIconServiceMethodMatches(
-            dataInitializer, MTImageDataInitializerTypeEncoding,
-            MTIconServiceExpectedIconFoundationPath)) {
-        MTIconServiceABISetError(error, 3,
-            @"IFImage initWithData:uuid:validationToken: rehydration ABI changed.");
+            @"No validated IFCacheImage constructor/bitmapData/IFImage rehydrator path is available.");
         return NO;
     }
     MTValidatedBundleIconClass = bundleIconClass;
     MTValidatedDescriptorClass = descriptorClass;
-    MTValidatedCacheImageClass = cacheImageClass;
-    MTValidatedCacheImageInitializer = cacheInitializer;
-    MTValidatedImageClass = imageClass;
-    MTValidatedImageDataInitializer = dataInitializer;
+    MTValidatedImageConstruction = construction;
+    os_log_with_type(os_log_create("com.hmmzzz.marktheme", "icon-service-abi"),
+        OS_LOG_TYPE_DEFAULT, "Validated image construction selectedPath=%{public}s",
+        MTIconServiceImageConstructionPathName(construction.path));
     if (generationMethodOut != NULL) *generationMethodOut = generationMethod;
     return YES;
 }
@@ -430,7 +462,10 @@ NSString *MTIconServiceABIImageDigest(id image) {
         ? [(NSUUID *)digest UUIDString].uppercaseString : nil;
 }
 
-id MTIconServiceABICreateReplacementImage(CGImageRef image,
+static id MTIconServiceCreateReplacementImage(
+                                          MTIconServiceImageConstructionABI construction,
+                                          NSString *expectedImage,
+                                          CGImageRef image,
                                           id originalImage,
                                           MTIconServiceImageGeometry geometry,
                                           NSError **error) {
@@ -444,31 +479,53 @@ id MTIconServiceABICreateReplacementImage(CGImageRef image,
         return nil;
     }
 
-    Class cacheImageClass = MTValidatedCacheImageClass;
-    Method cacheMethod = MTValidatedCacheImageInitializer;
-    Class imageClass = MTValidatedImageClass;
-    Method dataMethod = MTValidatedImageDataInitializer;
-    if (cacheImageClass == Nil || cacheMethod == NULL ||
+    Class cacheImageClass = construction.cacheImageClass;
+    Method cacheMethod = construction.cacheInitializer;
+    Class imageClass = construction.imageClass;
+    Method dataMethod = construction.dataInitializer;
+    if (construction.path == MTIconServiceImageConstructionUnavailable ||
+        cacheImageClass == Nil ||
         imageClass == Nil || dataMethod == NULL) {
         MTIconServiceABISetError(error, 7,
             @"IFImage construction ABI was not installed.");
         return nil;
     }
-    SEL cacheSelector = method_getName(cacheMethod);
     SEL dataSelector = method_getName(dataMethod);
 
-    id temporary = ((MTCacheImageInitializerFunction)
-        method_getImplementation(cacheMethod))(
-            [cacheImageClass alloc], cacheSelector, image, geometry.scale,
-            geometry.minimumSize, geometry.placeholder, geometry.iconSize);
+    id temporary = nil;
+    if (construction.path == MTIconServiceImageConstructionLegacy) {
+        SEL cacheSelector = method_getName(cacheMethod);
+        temporary = ((MTCacheImageInitializerFunction)
+            method_getImplementation(cacheMethod))(
+                [cacheImageClass alloc], cacheSelector, image, geometry.scale,
+                geometry.minimumSize, geometry.placeholder, geometry.iconSize);
+    } else if (construction.path == MTIconServiceImageConstructionSplit) {
+        Method splitMethod = construction.splitInitializer;
+        temporary = ((MTSplitCacheImageInitializerFunction)
+            method_getImplementation(splitMethod))(
+                [cacheImageClass alloc], method_getName(splitMethod), image,
+                geometry.scale, geometry.minimumSize, geometry.placeholder);
+        // Set geometry before IconFoundation serializes its bitmap. Resolve
+        // against the initialized object as init-family methods may substitute
+        // a concrete instance; never call a setter on an unvalidated receiver.
+        Method sizeSetter = MTIconServiceExactMethod(temporary,
+            MTIconSizeSetterName, MTIconSizeSetterTypeEncoding, expectedImage);
+        if (sizeSetter == NULL) {
+            MTIconServiceABISetError(error, 8,
+                @"Initialized IFCacheImage has no validated icon-size setter.");
+            return nil;
+        }
+        ((MTSizeSetterFunction)method_getImplementation(sizeSetter))(
+            temporary, method_getName(sizeSetter), geometry.iconSize);
+    }
     id bitmapData = MTIconServiceObjectGetter(
-        temporary, "bitmapData", MTIconServiceExpectedIconFoundationPath);
+        temporary, "bitmapData", expectedImage);
     id originalUUID = MTIconServiceObjectGetter(
-        originalImage, "uuid", MTIconServiceExpectedIconFoundationPath);
+        originalImage, "uuid", expectedImage);
     id validationToken =
         MTIconServiceObjectGetter(
             originalImage, "validationToken",
-            MTIconServiceExpectedIconFoundationPath);
+            expectedImage);
     if (temporary == nil || bitmapData == nil ||
         ![validationToken respondsToSelector:@selector(length)] ||
         [(NSData *)validationToken length] != 40) {
@@ -487,7 +544,7 @@ id MTIconServiceABICreateReplacementImage(CGImageRef image,
     }
     Method largestSetter = MTIconServiceExactMethod(
         replacement, "setLargest:", "v20@0:8B16",
-        MTIconServiceExpectedIconFoundationPath);
+        expectedImage);
     if (largestSetter == NULL) {
         MTIconServiceABISetError(error, 10,
             @"IFImage largest-flag setter changed.");
@@ -497,3 +554,27 @@ id MTIconServiceABICreateReplacementImage(CGImageRef image,
         replacement, method_getName(largestSetter), geometry.largest);
     return replacement;
 }
+
+id MTIconServiceABICreateReplacementImage(CGImageRef image,
+                                          id originalImage,
+                                          MTIconServiceImageGeometry geometry,
+                                          NSError **error) {
+    return MTIconServiceCreateReplacementImage(MTValidatedImageConstruction,
+        MTIconServiceExpectedIconFoundationPath, image, originalImage, geometry, error);
+}
+
+#if defined(MT_HOST_TESTING)
+MTIconServiceImageConstructionPath MTIconServiceABITestImageConstructionPath(
+    Class cacheClass, Class imageClass, NSString *expectedImage) {
+    return MTIconServiceResolveImageConstruction(cacheClass, imageClass, expectedImage).path;
+}
+
+id MTIconServiceABITestCreateReplacementImage(
+    Class cacheClass, Class imageClass, NSString *expectedImage,
+    CGImageRef image, id originalImage, MTIconServiceImageGeometry geometry,
+    NSError **error) {
+    return MTIconServiceCreateReplacementImage(
+        MTIconServiceResolveImageConstruction(cacheClass, imageClass, expectedImage),
+        expectedImage, image, originalImage, geometry, error);
+}
+#endif
