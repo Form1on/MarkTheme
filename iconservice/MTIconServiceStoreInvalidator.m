@@ -9,6 +9,7 @@
 #include <string.h>
 
 #import "MTIconServiceABI.h"
+#import "MTIconServiceABIDiagnostics.h"
 
 NSString *const MTIconServiceStoreInvalidatorErrorDomain =
     @"com.hmmzzz.marktheme.icon-service-store-invalidator";
@@ -88,12 +89,13 @@ static id MTIconServiceObjectGetter(id object,
 static void MTIconServiceInvalidatorSetError(NSError **error,
                                               NSInteger code,
                                               NSString *description) {
-    if (error == NULL) return;
-    *error = [NSError errorWithDomain:MTIconServiceStoreInvalidatorErrorDomain
+    NSError *failure = [NSError errorWithDomain:MTIconServiceStoreInvalidatorErrorDomain
                                  code:code
                              userInfo:@{
         NSLocalizedDescriptionKey : description,
     }];
+    MTIconServiceLogABIDiagnosticReport(MTIconServiceABIDiagnosticReport(failure));
+    if (error != NULL) *error = failure;
 }
 
 @interface MTIconServiceStoreInvalidationResult ()
@@ -199,7 +201,12 @@ static void MTIconServiceHookedClearOperationRun(id self, SEL selector) {
             @"Icon service cache-control Hooks are already installed.");
         return NO;
     }
-    if (!MTIconServiceABIValidateRuntime(NULL, error)) return NO;
+    NSError *ABIError = nil;
+    if (!MTIconServiceABIValidateRuntime(NULL, &ABIError)) {
+        MTIconServiceLogABIDiagnosticReport(MTIconServiceABIDiagnosticReport(ABIError));
+        if (error != NULL) *error = ABIError;
+        return NO;
+    }
 
     Class serviceClass = objc_getClass(MTServiceClassName);
     SEL serviceSelector = sel_registerName(MTServiceSelectorName);

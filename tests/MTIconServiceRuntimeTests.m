@@ -1,6 +1,8 @@
 #import "MTIconServiceRuntimeTests.h"
 
 #import "MTIconServiceABI.h"
+#import "MTIconServiceABIDiagnostics.h"
+#import <dlfcn.h>
 #import "MTIconServiceImageResolver.h"
 #import "MTIconServiceRuntimeMode.h"
 #import "MTRuntimeSnapshot.h"
@@ -330,8 +332,68 @@ static void MTIconServiceRunGenerationSwapRaceTests(void) {
     CGImageRelease(stock);
 }
 
+static NSUInteger MTDiagnosticPrivateCalls;
+
+static void MTDiagnosticMethodMustNotRun(__unused id object, __unused SEL selector) {
+    MTDiagnosticPrivateCalls++;
+}
+
+static void MTIconServiceRunABIDiagnosticTests(void) {
+    Class fixture = objc_allocateClassPair(NSObject.class, "MTIconServiceDiagnosticFixture", 0);
+    MTIconServiceAssert(fixture != Nil, @"Diagnostic fixture must be unique");
+    if (fixture == Nil) return;
+    IMP stub = (IMP)MTDiagnosticMethodMustNotRun;
+    class_addMethod(fixture, sel_registerName("run"), stub, "v16@0:8");
+    class_addMethod(fixture, sel_registerName("operation"), stub, "Q16@0:8");
+    class_addMethod(fixture, sel_registerName("cache"), stub, "@16@0:8");
+    class_addMethod(fixture, sel_registerName("incompatibleRun:"), stub, "v24@0:8@16");
+    class_addMethod(object_getClass(fixture), sel_registerName("classOnlyRun"), stub, "v16@0:8");
+    objc_registerClassPair(fixture);
+    Dl_info info = {0};
+    MTIconServiceAssert(dladdr((const void *)stub, &info) != 0 && info.dli_fname != NULL,
+        @"Fixture implementation image must resolve");
+    NSString *image = info.dli_fname == NULL ? @"" : [NSString stringWithUTF8String:info.dli_fname];
+    NSArray *expected = @[@[@"run", @"v16@0:8"], @[@"operation", @"Q16@0:8"], @[@"cache", @"@16@0:8"]];
+    for (NSArray<NSString *> *entry in expected) {
+        NSDictionary *report = MTIconServiceMethodDiagnostic(fixture, entry[0], NO, entry[1].UTF8String, image);
+        MTIconServiceAssert([report[@"matchesExistingValidation"] boolValue] &&
+            [report[@"encoding"] isEqual:entry[1]] && [report[@"kind"] isEqual:@"instance"],
+            @"Existing expected ABI must be reported exactly");
+    }
+    NSDictionary *incompatible = MTIconServiceMethodDiagnostic(fixture, @"incompatibleRun:", NO, "v16@0:8", image);
+    MTIconServiceAssert(![incompatible[@"matchesExistingValidation"] boolValue] &&
+        [incompatible[@"failures"] containsObject:@"type-encoding-mismatch"],
+        @"Changed argument ABI must be identified, never treated as compatible");
+    NSDictionary *signedResult = MTIconServiceMethodDiagnostic(fixture, @"operation", NO, "q16@0:8", image);
+    MTIconServiceAssert([signedResult[@"failures"] containsObject:@"type-encoding-mismatch"],
+        @"No speculative signed/unsigned compatibility must enter diagnostics");
+    NSDictionary *wrongImage = MTIconServiceMethodDiagnostic(fixture, @"run", NO, "v16@0:8", @"/not-the-agent");
+    MTIconServiceAssert([wrongImage[@"failures"] containsObject:@"implementation-image-mismatch"],
+        @"A matching encoding in the wrong image must be diagnosed independently");
+    NSDictionary *wrongKind = MTIconServiceMethodDiagnostic(fixture, @"classOnlyRun", NO, "v16@0:8", image);
+    NSDictionary *classKind = MTIconServiceMethodDiagnostic(fixture, @"classOnlyRun", YES, "v16@0:8", image);
+    MTIconServiceAssert([wrongKind[@"failures"] containsObject:@"instance-method-missing"] &&
+        [classKind[@"matchesExistingValidation"] boolValue],
+        @"Class methods must not masquerade as instance methods");
+    NSDictionary *missing = MTIconServiceMethodDiagnostic(Nil, @"run", NO, "v16@0:8", image);
+    MTIconServiceAssert([missing[@"failures"] containsObject:@"class-missing"],
+        @"Missing classes must produce explicit diagnostic evidence");
+    for (NSString *domain in @[@"com.hmmzzz.marktheme.icon-service-abi",
+                               @"com.hmmzzz.marktheme.icon-service-store-invalidator"]) {
+        NSError *failure = [NSError errorWithDomain:domain code:3 userInfo:nil];
+        NSDictionary *report = MTIconServiceABIDiagnosticReport(failure);
+        MTIconServiceAssert([report[@"failure"][@"domain"] isEqual:domain] &&
+            [report[@"failure"][@"code"] isEqual:@3] &&
+            [NSJSONSerialization isValidJSONObject:report],
+            @"Both meanings of error 3 must retain their error domain in valid JSON");
+    }
+    MTIconServiceAssert(MTDiagnosticPrivateCalls == 0,
+        @"Metadata diagnostics must never invoke private methods");
+}
+
 NSUInteger MTRunIconServiceRuntimeTests(void) {
     MTIconServiceAssertionCount = 0;
+    MTIconServiceRunABIDiagnosticTests();
     MTIconServiceAssert(
         MTIconServiceConfiguredRuntimeMode() ==
             MTIconServiceRuntimeModeDisabled &&

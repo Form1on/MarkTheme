@@ -11,6 +11,7 @@ MARKTHEME_ICON_SERVICE_STORE_CONTROL ?= 1
 
 MarkThemeIconServiceRuntime_FILES = \
     MTIconServiceABI.m \
+    MTIconServiceABIDiagnostics.m \
     MTIconServiceBootstrap.m \
     MTIconServiceGenerationAdapter.m \
     MTIconServiceImageResolver.m \

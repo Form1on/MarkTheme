@@ -42,8 +42,9 @@ static os_log_t MTIconServiceLog(void) {
 
 static void MTIconServiceLogError(NSString *stage, NSError *error) {
     os_log_with_type(MTIconServiceLog(), OS_LOG_TYPE_ERROR,
-        "icon service %{public}@ failed: %{public}@/%{public}ld",
-        stage, error.domain ?: @"unknown", (long)error.code);
+        "icon service %{public}@ failed: %{public}@/%{public}ld: %{public}@",
+        stage, error.domain ?: @"unknown", (long)error.code,
+        error.localizedDescription ?: @"no error description");
 }
 
 static uint8_t MTIconServiceErrorDetail(NSError *error) {
