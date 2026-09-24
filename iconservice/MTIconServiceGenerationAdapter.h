@@ -29,4 +29,13 @@ FOUNDATION_EXPORT BOOL MTIconServiceGenerationAdapterInstall(
     MTIconServiceImageResolver *_Nullable resolver,
     NSError **error);
 
+// One active invalidate/generate cycle, associated with its exact Generation.
+FOUNDATION_EXPORT void MTIconServiceGenerationAdapterBeginCycle(
+    uint64_t sequence, NSString *generationIdentifier);
+FOUNDATION_EXPORT uint32_t MTIconServiceGenerationAdapterCycleHookCalls(
+    uint64_t sequence);
+FOUNDATION_EXPORT uint32_t MTIconServiceGenerationAdapterCycleReplacements(
+    uint64_t sequence);
+FOUNDATION_EXPORT void MTIconServiceGenerationAdapterPublishTelemetry(void);
+
 NS_ASSUME_NONNULL_END

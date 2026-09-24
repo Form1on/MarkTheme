@@ -67,11 +67,46 @@ class CapabilityContracts(unittest.TestCase):
     def test_acknowledgement_still_requires_verification(self):
         bootstrap = source("iconservice/MTIconServiceBootstrap.m")
         callback = bootstrap.split("^(MTIconServiceStoreInvalidationResult *result)", 1)[1]
-        verified, failure = callback.split("if (result.isVerified) {", 1)[1].split("} else {", 1)
-        self.assertIn("MTIconServicePostAcknowledgement(sequence)", verified)
-        self.assertNotIn("MTIconServicePostAcknowledgement", failure)
+        verified = callback.split("if (result.isVerified) {", 1)[1].split(
+            "MTIconServiceRuntimeStageTransactionFailed", 1)[0]
+        self.assertIn("MTIconServiceFinishVerifiedCycle(", verified)
+        self.assertIn("MTIconServiceApplyEvidenceSatisfied(true, requestsApplicationIcons,", bootstrap)
+        self.assertLess(bootstrap.index("if (!MTIconServiceApplyEvidenceSatisfied("),
+                        bootstrap.index("MTIconServicePostAcknowledgement(sequence);"))
+        self.assertIn("MTIconServiceRuntimeStageGenerationNotObserved", bootstrap)
+        self.assertIn("MTIconServiceRuntimeStageReplacementNotProduced", bootstrap)
+        self.assertIn("MTIconServiceGenerationAdapterCycleReplacements(sequence)", bootstrap)
+        self.assertIn("if (result.isVerified)", bootstrap)
         self.assertIn("if (!atomic_load_explicit(", bootstrap)
         self.assertIn("runtimeResult.iconServiceAcknowledged", source("workflow/MTThemeApplyService.m"))
+
+    def test_execution_telemetry_is_bound_to_live_daemon(self):
+        adapter = source("iconservice/MTIconServiceGenerationAdapter.m")
+        transport = source("runtime/MTRuntimeInvalidation.m")
+        helper = source("helper/main.m")
+        for name in ("generationAdapterInstalled", "generationHookCallCount",
+                     "resolverCallCount", "themedResolverMatchCount",
+                     "replacementCGImageCount", "replacementIFImageCount",
+                     "replacementReturnedCount", "passthroughCount",
+                     "constructionFailureCount", "selectedImageConstructionPath",
+                     "lastBundleIdentifier"):
+            self.assertIn(name, adapter)
+            self.assertIn(name, transport)
+        self.assertIn("generationIdentifierOut:&resolvedGenerationIdentifier", adapter)
+        self.assertIn("MTActiveCycleGenerationIdentifier", adapter)
+        self.assertIn("MTIconServiceReadExecutionTelemetry(status)", helper)
+        self.assertIn("MTIconServiceRuntimeStatusIsCurrentAndLive(status)", transport)
+        self.assertIn("start == end", transport)
+        self.assertIn("telemetryAvailable", transport)
+
+    def test_compiled_execution_counters_and_apply_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = str(pathlib.Path(directory) / "execution")
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            "-pthread", "-I", str(ROOT / "iconservice"),
+                            str(ROOT / "tests/MTIconServiceExecutionTests.c"),
+                            "-o", binary], check=True)
+            subprocess.run([binary], check=True)
 
     def test_probe_is_focused_and_read_only(self):
         probe = source("tools/iconservice-abi-probe/Probe.m")

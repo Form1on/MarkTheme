@@ -227,10 +227,10 @@ static BOOL MTThemeApplyCheckCancellation(
         });
         MTThemeApplySetError(error, MTThemeApplyServiceErrorRuntime,
             MTThemeApplyStageActivateRuntime,
-            @"IconServices did not confirm the application-icon source and "
-             "its verified cache transaction. Respring is not a substitute "
-             "for this source failure; retry Apply after the service is "
-             "available.",
+            @"IconServices did not verify both its native cache transaction "
+             "and a themed application-icon replacement in this Apply. "
+             "Inspect iconServiceRuntime in helper status --json for the "
+             "generation execution stage and counters.",
             nil);
         return nil;
     }

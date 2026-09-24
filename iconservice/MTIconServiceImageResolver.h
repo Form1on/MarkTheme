@@ -24,6 +24,7 @@ typedef struct MTIconServiceImageResolverObservation {
     _Atomic(uint64_t) stockStores;
     _Atomic(uint64_t) systemMaskHits;
     _Atomic(uint64_t) systemMaskRenders;
+    _Atomic(uint32_t) themedMatches;
 } MTIconServiceImageResolverObservation;
 
 FOUNDATION_EXPORT MTIconServiceImageResolverObservation
@@ -57,7 +58,20 @@ typedef NS_ENUM(NSUInteger, MTIconServiceDynamicCategoryPolicy) {
                             pixelWidth:(uint32_t)pixelWidth
                            pixelHeight:(uint32_t)pixelHeight
                        stockImageDigest:(NSString *)stockImageDigest
-                        stockCGImage:(CGImageRef)stockCGImage
+                       stockCGImage:(CGImageRef)stockCGImage
+                                 error:(NSError **)error CF_RETURNS_RETAINED;
+
+// The identity is taken from the same immutable snapshot that supplied the
+// replacement, so telemetry cannot credit an overlapping older Generation.
+- (CGImageRef _Nullable)
+    copyReplacementForBundleIdentifier:(NSString *)bundleIdentifier
+                             pointSize:(CGSize)pointSize
+                                 scale:(double)scale
+                            pixelWidth:(uint32_t)pixelWidth
+                           pixelHeight:(uint32_t)pixelHeight
+                      stockImageDigest:(NSString *)stockImageDigest
+                          stockCGImage:(CGImageRef)stockCGImage
+               generationIdentifierOut:(NSString * _Nullable *_Nullable)generationIdentifierOut
                                  error:(NSError **)error CF_RETURNS_RETAINED;
 
 @end

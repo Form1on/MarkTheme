@@ -11,6 +11,7 @@
 #import "MTGenerationReader.h"
 #import "MTIconMaskConfiguration.h"
 #import "MTIconMaskContract.h"
+#import "MTIconServiceExecutionCounters.h"
 #import "MTIconOverlayContract.h"
 #import "MTRuntimePublishedImageLoader.h"
 #import "MTRuntimeSnapshot.h"
@@ -23,7 +24,7 @@ NSString *const MTIconServiceImageResolverErrorDomain =
 
 MTIconServiceImageResolverObservation
     MTRuntimeIconServiceImageResolverObservation = {
-        .schemaVersion = 1,
+        .schemaVersion = 2,
 };
 
 static const NSUInteger MTIconServiceMaximumCachedImageCount = 256;
@@ -304,7 +305,24 @@ static CGImageRef MTIconServiceCopySystemMask(CGSize pointSize,
                                    stockImageDigest:(NSString *)stockImageDigest
                                       stockCGImage:(CGImageRef)stockCGImage
                                              error:(NSError **)error {
+    return [self copyReplacementForBundleIdentifier:bundleIdentifier
+        pointSize:pointSize scale:scale pixelWidth:pixelWidth
+        pixelHeight:pixelHeight stockImageDigest:stockImageDigest
+        stockCGImage:stockCGImage generationIdentifierOut:NULL error:error];
+}
+
+- (CGImageRef)copyReplacementForBundleIdentifier:
+    (NSString *)bundleIdentifier
+                                         pointSize:(CGSize)pointSize
+                                             scale:(double)scale
+                                        pixelWidth:(uint32_t)pixelWidth
+                                       pixelHeight:(uint32_t)pixelHeight
+                                  stockImageDigest:(NSString *)stockImageDigest
+                                      stockCGImage:(CGImageRef)stockCGImage
+                           generationIdentifierOut:(NSString **)generationIdentifierOut
+                                             error:(NSError **)error {
     if (error != NULL) *error = nil;
+    if (generationIdentifierOut != NULL) *generationIdentifierOut = nil;
     if (bundleIdentifier.length == 0 || stockImageDigest.length == 0 ||
         stockCGImage == NULL || pixelWidth == 0 || pixelHeight == 0 ||
         pixelWidth != pixelHeight || pixelWidth > 1200 ||
@@ -328,6 +346,9 @@ static CGImageRef MTIconServiceCopySystemMask(CGSize pointSize,
     NSString *generationIdentifier = generation.generationIdentifier;
     if (!snapshot.isReady || generation == nil ||
         generationIdentifier.length == 0) return NULL;
+    if (generationIdentifierOut != NULL) {
+        *generationIdentifierOut = generationIdentifier;
+    }
     // Calendar and Clock are live icon categories, not ordinary cached
     // application artwork. The persistent service source excludes them so it
     // cannot freeze date/hand content. A bounded secondary semantic cache may
@@ -364,6 +385,8 @@ static CGImageRef MTIconServiceCopySystemMask(CGSize pointSize,
         atomic_fetch_add_explicit(
             &MTRuntimeIconServiceImageResolverObservation.compositeHits,
             1, memory_order_relaxed);
+        MTIconServiceCount32(
+            &MTRuntimeIconServiceImageResolverObservation.themedMatches);
         return CGImageRetain(cached.image);
     }
 
@@ -435,6 +458,8 @@ static CGImageRef MTIconServiceCopySystemMask(CGSize pointSize,
         }
         return NULL;
     }
+    MTIconServiceCount32(
+        &MTRuntimeIconServiceImageResolverObservation.themedMatches);
     CGImageRef current = staticImage == nil
         ? CGImageRetain(stockCGImage)
         : CGImageRetain(staticImage.image);

@@ -563,6 +563,11 @@ id MTIconServiceABICreateReplacementImage(CGImageRef image,
         MTIconServiceExpectedIconFoundationPath, image, originalImage, geometry, error);
 }
 
+NSString *MTIconServiceABISelectedImageConstructionPath(void) {
+    return [NSString stringWithUTF8String:MTIconServiceImageConstructionPathName(
+        MTValidatedImageConstruction.path)];
+}
+
 #if defined(MT_HOST_TESTING)
 MTIconServiceImageConstructionPath MTIconServiceABITestImageConstructionPath(
     Class cacheClass, Class imageClass, NSString *expectedImage) {

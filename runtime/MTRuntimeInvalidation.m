@@ -2,9 +2,11 @@
 
 #import <dispatch/dispatch.h>
 #import <notify.h>
+#import <os/lock.h>
 
 #include <errno.h>
 #include <signal.h>
+#include <string.h>
 #include <unistd.h>
 
 #if !defined(MARKTHEME_RUNTIME_BUILD_NUMBER)
@@ -19,6 +21,156 @@ NSString *const MTIconServiceInvalidationNotificationName =
     @"com.hmmzzz.marktheme.icon-service-store-changed";
 static NSString *const MTIconServiceRuntimeStatusNotificationName =
     @"com.hmmzzz.marktheme.icon-service-runtime-status";
+// notify state is shared with the Helper; the writer is the injected agent.
+// A versioned header brackets all fields so a reader cannot mix two updates.
+static const char *const MTExecutionNames[] = {
+    "com.hmmzzz.marktheme.execution208.header",
+    "com.hmmzzz.marktheme.execution208.installed",
+    "com.hmmzzz.marktheme.execution208.hooks",
+    "com.hmmzzz.marktheme.execution208.resolver",
+    "com.hmmzzz.marktheme.execution208.matches",
+    "com.hmmzzz.marktheme.execution208.cgimage",
+    "com.hmmzzz.marktheme.execution208.ifimage",
+    "com.hmmzzz.marktheme.execution208.returned",
+    "com.hmmzzz.marktheme.execution208.passthrough",
+    "com.hmmzzz.marktheme.execution208.failed",
+    "com.hmmzzz.marktheme.execution208.cycle-sequence",
+    "com.hmmzzz.marktheme.execution208.cycle-hooks",
+    "com.hmmzzz.marktheme.execution208.cycle-returns",
+    "com.hmmzzz.marktheme.execution208.path",
+    "com.hmmzzz.marktheme.execution208.bundle0",
+    "com.hmmzzz.marktheme.execution208.bundle1",
+    "com.hmmzzz.marktheme.execution208.bundle2",
+    "com.hmmzzz.marktheme.execution208.bundle3",
+    "com.hmmzzz.marktheme.execution208.bundle4",
+    "com.hmmzzz.marktheme.execution208.bundle5",
+};
+static NSString *const MTExecutionKeys[] = {
+    @"generationAdapterInstalled", @"generationHookCallCount",
+    @"resolverCallCount", @"themedResolverMatchCount",
+    @"replacementCGImageCount", @"replacementIFImageCount",
+    @"replacementReturnedCount", @"passthroughCount",
+    @"constructionFailureCount",
+    @"generationCycleSequence", @"generationCycleHookCallCount",
+    @"generationCycleReplacementReturnedCount",
+};
+enum { MTExecutionFieldCount = sizeof(MTExecutionNames) / sizeof(MTExecutionNames[0]),
+       MTExecutionCounterCount = 12, MTExecutionPathIndex = 13,
+       MTExecutionBundleIndex = 14, MTExecutionBundleChunks = 6 };
+static os_unfair_lock MTExecutionPublishLock = OS_UNFAIR_LOCK_INIT;
+static uint32_t MTExecutionRevision;
+
+static uint64_t MTExecutionHeader(uint32_t revision) {
+    return ((uint64_t)MARKTHEME_RUNTIME_BUILD_NUMBER << 48) |
+        (((uint64_t)getpid() & UINT64_C(0xffffff)) << 24) |
+        (revision & UINT32_C(0xffffff));
+}
+
+BOOL MTIconServicePublishExecutionTelemetry(NSDictionary<NSString *, id> *telemetry) {
+    if (telemetry == nil) return NO;
+    static int tokens[MTExecutionFieldCount];
+    static BOOL registered;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        registered = YES;
+        for (NSUInteger i = 0; i < MTExecutionFieldCount; i++) {
+            if (notify_register_check(MTExecutionNames[i], &tokens[i]) !=
+                NOTIFY_STATUS_OK || tokens[i] == NOTIFY_TOKEN_INVALID) {
+                registered = NO;
+            }
+        }
+    });
+    if (!registered) return NO;
+    uint64_t values[MTExecutionFieldCount] = {0};
+    for (NSUInteger i = 0; i < MTExecutionCounterCount; i++) {
+        id value = telemetry[MTExecutionKeys[i]];
+        values[i + 1] = [value respondsToSelector:@selector(unsignedLongLongValue)]
+            ? MIN([value unsignedLongLongValue], (uint64_t)UINT32_MAX) : 0;
+    }
+    NSString *path = telemetry[@"selectedImageConstructionPath"];
+    values[MTExecutionPathIndex] = [path isEqualToString:@"legacy-cache-image-bitmap-data"] ? 1 :
+        [path isEqualToString:@"split-cache-image-init-icon-size-bitmap-data"] ? 2 : 0;
+    NSString *bundle = telemetry[@"lastBundleIdentifier"];
+    // Bundle IDs are ASCII in the validated request contract. Clamp before
+    // encoding; the zero-initialized last byte always terminates the string.
+    char bytes[MTExecutionBundleChunks * sizeof(uint64_t)] = {0};
+    if ([bundle isKindOfClass:NSString.class]) {
+        const char *UTF8 = bundle.UTF8String;
+        if (UTF8 != NULL) {
+            size_t length = strnlen(UTF8, sizeof(bytes) - 1);
+            memcpy(bytes, UTF8, length);
+            if (UTF8[length] != '\0') values[MTExecutionPathIndex] |= 8;
+        }
+    }
+    for (NSUInteger i = 0; i < MTExecutionBundleChunks; i++) {
+        for (NSUInteger byte = 0; byte < 8; byte++) {
+            values[MTExecutionBundleIndex + i] |=
+                ((uint64_t)(uint8_t)bytes[i * 8 + byte]) << (byte * 8);
+        }
+    }
+    os_unfair_lock_lock(&MTExecutionPublishLock);
+    uint32_t odd = (MTExecutionRevision + 1) & UINT32_C(0xffffff);
+    if ((odd & 1) == 0) odd = (odd + 1) & UINT32_C(0xffffff);
+    MTExecutionRevision = odd;
+    BOOL ok = notify_set_state(tokens[0], MTExecutionHeader(odd)) == NOTIFY_STATUS_OK;
+    for (NSUInteger i = 1; i < MTExecutionFieldCount; i++) {
+        ok = (notify_set_state(tokens[i], values[i]) == NOTIFY_STATUS_OK) && ok;
+    }
+    MTExecutionRevision = (odd + 1) & UINT32_C(0xffffff);
+    ok = (notify_set_state(tokens[0], MTExecutionHeader(MTExecutionRevision)) ==
+        NOTIFY_STATUS_OK) && ok;
+    os_unfair_lock_unlock(&MTExecutionPublishLock);
+    return ok;
+}
+
+NSDictionary<NSString *, id> *MTIconServiceReadExecutionTelemetry(
+    MTIconServiceRuntimeStatus status) {
+    if (!MTIconServiceRuntimeStatusIsCurrentAndLive(status)) {
+        return @{@"telemetryAvailable" : @NO};
+    }
+    int tokens[MTExecutionFieldCount] = {0};
+    NSUInteger registered = 0;
+    for (; registered < MTExecutionFieldCount; registered++) {
+        if (notify_register_check(MTExecutionNames[registered],
+                &tokens[registered]) != NOTIFY_STATUS_OK ||
+            tokens[registered] == NOTIFY_TOKEN_INVALID) break;
+    }
+    uint64_t values[MTExecutionFieldCount] = {0};
+    BOOL valid = registered == MTExecutionFieldCount;
+    if (valid) {
+        uint64_t start = 0, end = 0;
+        valid = notify_get_state(tokens[0], &start) == NOTIFY_STATUS_OK &&
+            (start & 1) == 0 && (start >> 48) == status.runtimeBuild &&
+            ((start >> 24) & UINT64_C(0xffffff)) == status.processIdentifier;
+        for (NSUInteger i = 1; valid && i < MTExecutionFieldCount; i++) {
+            valid = notify_get_state(tokens[i], &values[i]) == NOTIFY_STATUS_OK;
+        }
+        valid = valid && notify_get_state(tokens[0], &end) == NOTIFY_STATUS_OK &&
+            start == end;
+    }
+    for (NSUInteger i = 0; i < registered; i++) notify_cancel(tokens[i]);
+    if (!valid) return @{@"telemetryAvailable" : @NO};
+    NSMutableDictionary<NSString *, id> *result = [@{
+        @"telemetryAvailable" : @YES,
+        @"selectedImageConstructionPath" :
+            (values[MTExecutionPathIndex] & 7) == 1 ? @"legacy-cache-image-bitmap-data" :
+            (values[MTExecutionPathIndex] & 7) == 2 ? @"split-cache-image-init-icon-size-bitmap-data" :
+            @"unavailable",
+        @"lastBundleIdentifierTruncated" : @((values[MTExecutionPathIndex] & 8) != 0),
+    } mutableCopy];
+    for (NSUInteger i = 0; i < MTExecutionCounterCount; i++) {
+        result[MTExecutionKeys[i]] = @(values[i + 1]);
+    }
+    char bytes[MTExecutionBundleChunks * sizeof(uint64_t) + 1] = {0};
+    for (NSUInteger i = 0; i < MTExecutionBundleChunks; i++) {
+        for (NSUInteger byte = 0; byte < 8; byte++) {
+            bytes[i * 8 + byte] = (char)(values[MTExecutionBundleIndex + i] >> (byte * 8));
+        }
+    }
+    NSString *bundle = [NSString stringWithUTF8String:bytes];
+    if (bundle.length > 0) result[@"lastBundleIdentifier"] = bundle;
+    return result;
+}
 
 static const uint64_t MTIconServiceStatusBuildShift = 48;
 static const uint64_t MTIconServiceStatusPIDShift = 24;
@@ -114,7 +266,9 @@ BOOL MTIconServiceRuntimeStatusCanReceiveTransactions(
     MTIconServiceRuntimeStatus status) {
     return MTIconServiceRuntimeStatusIsCurrentAndLive(status) &&
         (status.stage == MTIconServiceRuntimeStageReady ||
-         status.stage == MTIconServiceRuntimeStageTransactionFailed);
+         status.stage == MTIconServiceRuntimeStageTransactionFailed ||
+         status.stage == MTIconServiceRuntimeStageGenerationNotObserved ||
+         status.stage == MTIconServiceRuntimeStageReplacementNotProduced);
 }
 
 NSString *MTIconServiceRuntimeStageName(
@@ -132,6 +286,10 @@ NSString *MTIconServiceRuntimeStageName(
             return @"ready";
         case MTIconServiceRuntimeStageTransactionFailed:
             return @"transaction-failed";
+        case MTIconServiceRuntimeStageGenerationNotObserved:
+            return @"generation-not-observed";
+        case MTIconServiceRuntimeStageReplacementNotProduced:
+            return @"replacement-not-produced";
         case MTIconServiceRuntimeStageDisabled:
             return @"disabled";
         case MTIconServiceRuntimeStageSnapshotLoaderFailed:

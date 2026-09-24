@@ -17,6 +17,8 @@ typedef NS_ENUM(uint8_t, MTIconServiceRuntimeStage) {
     MTIconServiceRuntimeStageStoreControlReady = 3,
     MTIconServiceRuntimeStageReady = 4,
     MTIconServiceRuntimeStageTransactionFailed = 5,
+    MTIconServiceRuntimeStageGenerationNotObserved = 6,
+    MTIconServiceRuntimeStageReplacementNotProduced = 7,
     MTIconServiceRuntimeStageDisabled = 64,
     MTIconServiceRuntimeStageSnapshotLoaderFailed = 128,
     MTIconServiceRuntimeStageStoreControlFailed = 129,
@@ -41,6 +43,13 @@ FOUNDATION_EXPORT BOOL MTIconServiceRuntimeStatusCanReceiveTransactions(
     MTIconServiceRuntimeStatus status);
 FOUNDATION_EXPORT NSString *MTIconServiceRuntimeStageName(
     MTIconServiceRuntimeStage stage);
+
+// A bounded, build/PID-bound observation of iconservicesagent's own hook.
+// Absence is explicitly reported; a Helper process never manufactures counts.
+FOUNDATION_EXPORT BOOL MTIconServicePublishExecutionTelemetry(
+    NSDictionary<NSString *, id> *telemetry);
+FOUNDATION_EXPORT NSDictionary<NSString *, id> *
+    MTIconServiceReadExecutionTelemetry(MTIconServiceRuntimeStatus status);
 
 // The Helper uses a separate service phase so outer display owners cannot
 // acknowledge before IconServices has reloaded the new Generation and

@@ -1,15 +1,18 @@
 #import <Foundation/Foundation.h>
+#import <dispatch/dispatch.h>
 
 #import <os/log.h>
 
 #include <stdatomic.h>
 
 #import "MTIconServiceGenerationAdapter.h"
+#import "MTIconServiceApplyEvidence.h"
 #import "MTIconServiceImageResolver.h"
 #import "MTIconServiceRuntimeMode.h"
 #import "MTIconServiceStoreInvalidator.h"
 #import "MTApplicationIconSourceState.h"
 #import "MTGenerationReader.h"
+#import "MTGenerationDescriptor.h"
 #import "MTRuntimeInvalidation.h"
 #import "MTRuntimeKernel.h"
 #import "MTRuntimeSnapshot.h"
@@ -28,7 +31,9 @@ static MTRuntimeKernel *MTIconServiceKernel;
 static MTIconServiceImageResolver *MTIconServiceResolver;
 static MTIconServiceStoreInvalidator *MTIconServiceInvalidator;
 static atomic_bool MTIconServiceRuntimeReady;
+static atomic_bool MTIconServiceApplyEvidenceFailed;
 static NSString *MTIconServiceCompletedGenerationIdentifier;
+static const int64_t MTGenerationObservationWindow = 350 * NSEC_PER_MSEC;
 
 static os_log_t MTIconServiceLog(void) {
     static os_log_t log;
@@ -58,8 +63,46 @@ static BOOL MTIconServicePublishReadyIfAvailable(void) {
     BOOL storeReady = MARKTHEME_ICON_SERVICE_STORE_CONTROL != 1 ||
         MTIconServiceInvalidator.isServiceAvailable;
     return runtimeReady && storeReady &&
+        !atomic_load_explicit(&MTIconServiceApplyEvidenceFailed,
+            memory_order_acquire) &&
         MTIconServicePublishRuntimeStatus(
             MTIconServiceRuntimeStageReady, 0);
+}
+
+static BOOL MTIconServiceSnapshotRequestsApplicationIcons(
+    MTRuntimeSnapshot *snapshot) {
+    if (!snapshot.isReady) return NO;
+    NSArray<NSString *> *modules = snapshot.generation.descriptor.moduleIDs;
+    return [modules containsObject:@"icons.static"] ||
+        [modules containsObject:@"icons.mask"] ||
+        [modules containsObject:@"icons.overlay"];
+}
+
+static void MTIconServiceFinishVerifiedCycle(
+    NSString *generationIdentifier, uint64_t sequence,
+    BOOL requestsApplicationIcons) {
+    if (MTIconServiceKernel != nil &&
+        MTIconServiceKernel.currentSnapshot.state.sequence != sequence) return;
+    uint32_t calls = MTIconServiceGenerationAdapterCycleHookCalls(sequence);
+    uint32_t replacements =
+        MTIconServiceGenerationAdapterCycleReplacements(sequence);
+    MTIconServiceGenerationAdapterPublishTelemetry();
+    if (!MTIconServiceApplyEvidenceSatisfied(true, requestsApplicationIcons,
+            calls, replacements)) {
+        atomic_store_explicit(&MTIconServiceApplyEvidenceFailed,
+            true, memory_order_release);
+        (void)MTIconServicePublishRuntimeStatus(
+            calls == 0 ? MTIconServiceRuntimeStageGenerationNotObserved :
+                MTIconServiceRuntimeStageReplacementNotProduced, 0);
+        return;
+    }
+    atomic_store_explicit(&MTIconServiceApplyEvidenceFailed,
+        false, memory_order_release);
+    @synchronized (MTIconServiceImageResolver.class) {
+        MTIconServiceCompletedGenerationIdentifier = generationIdentifier;
+    }
+    (void)MTIconServicePublishRuntimeStatus(MTIconServiceRuntimeStageReady, 0);
+    (void)MTIconServicePostAcknowledgement(sequence);
 }
 
 static void MTIconServiceCompleteSnapshot(
@@ -72,6 +115,8 @@ static void MTIconServiceCompleteSnapshot(
     NSString *generationIdentifier = snapshot.isReady
         ? snapshot.generation.generationIdentifier : @"stock";
     uint64_t sequence = snapshot.state.sequence;
+    BOOL requestsApplicationIcons =
+        MTIconServiceSnapshotRequestsApplicationIcons(snapshot);
     @synchronized (MTIconServiceImageResolver.class) {
         if ([MTIconServiceCompletedGenerationIdentifier
                 isEqualToString:generationIdentifier]) {
@@ -85,6 +130,9 @@ static void MTIconServiceCompleteSnapshot(
             return;
         }
     }
+    atomic_store_explicit(&MTIconServiceApplyEvidenceFailed,
+        false, memory_order_release);
+    MTIconServiceGenerationAdapterBeginCycle(sequence, generationIdentifier);
     MTIconServiceStoreInvalidator *storeInvalidator =
         MTIconServiceInvalidator;
     [storeInvalidator invalidateWholeStoreWithCompletion:
@@ -96,13 +144,20 @@ static void MTIconServiceCompleteSnapshot(
                 "native whole-cache transaction outcome=%{public}@",
                 result.outcome);
             if (result.isVerified) {
-                @synchronized (MTIconServiceImageResolver.class) {
-                    MTIconServiceCompletedGenerationIdentifier =
-                        generationIdentifier;
+                if (requestsApplicationIcons) {
+                    // A whole-cache operation can finish without ever calling
+                    // the validated generation hook. Observe a bounded window
+                    // after its normal return before accepting icon Apply.
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                            MTGenerationObservationWindow),
+                        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                            MTIconServiceFinishVerifiedCycle(
+                                generationIdentifier, sequence, YES);
+                        });
+                } else {
+                    MTIconServiceFinishVerifiedCycle(
+                        generationIdentifier, sequence, NO);
                 }
-                (void)MTIconServicePublishRuntimeStatus(
-                    MTIconServiceRuntimeStageReady, 0);
-                (void)MTIconServicePostAcknowledgement(sequence);
             } else {
                 (void)MTIconServicePublishRuntimeStatus(
                     MTIconServiceRuntimeStageTransactionFailed, 2);

@@ -56,6 +56,8 @@ FOUNDATION_EXPORT id _Nullable MTIconServiceABICreateReplacementImage(
     MTIconServiceImageGeometry geometry,
     NSError **error);
 
+FOUNDATION_EXPORT NSString *MTIconServiceABISelectedImageConstructionPath(void);
+
 #if defined(MT_HOST_TESTING)
 // Exercise the production resolver and construction sequence with host-owned
 // fixture classes. These entry points do not exist in device builds.

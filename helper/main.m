@@ -333,7 +333,7 @@ static NSDictionary<NSString *, id> *MTIconServiceStatusDictionary(
             @"stage" : @"unknown",
         };
     }
-    return @{
+    NSMutableDictionary<NSString *, id> *report = [@{
         @"available" : @YES,
         @"currentAndLive" :
             @(MTIconServiceRuntimeStatusIsCurrentAndLive(status)),
@@ -341,7 +341,9 @@ static NSDictionary<NSString *, id> *MTIconServiceStatusDictionary(
         @"processIdentifier" : @(status.processIdentifier),
         @"runtimeBuild" : @(status.runtimeBuild),
         @"stage" : MTIconServiceRuntimeStageName(status.stage),
-    };
+    } mutableCopy];
+    [report addEntriesFromDictionary:MTIconServiceReadExecutionTelemetry(status)];
+    return report;
 }
 
 static int MTPrintInvalidArguments(int argc, const char *argv[]) {
